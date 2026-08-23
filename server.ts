@@ -46,6 +46,11 @@ import {
   pcmToM4b,
   pcmToMp3,
 } from "./mediaConvert";
+import {
+  repairExtractedTextWithModel,
+  repairExtractionHeuristics,
+  type TextRepairPython,
+} from "./textRepair";
 
 function resolveBundledPython(auraRoot: string): { bin: string; home: string } | null {
   const envHome = process.env.AURA_PYTHON_HOME;
@@ -751,7 +756,7 @@ function sanitizeExtractedText(raw: string): string {
     collapsed.pop();
   }
 
-  return collapsed.join("\n").trim();
+  return repairExtractionHeuristics(collapsed.join("\n").trim());
 }
 
 // Helper: Extract Text from EPUB Chapters using local epub2 library
@@ -1022,43 +1027,109 @@ function parsePageRange(startPage: unknown, endPage: unknown): { start: number; 
 
 /** Join pdf.js text items into plain text, preserving line breaks. */
 function textContentToPlainText(textContent: {
-  items: Array<{ str?: string; transform?: number[]; hasEOL?: boolean } | unknown>;
+  items: Array<
+    | {
+        str?: string;
+        transform?: number[];
+        width?: number;
+        height?: number;
+        hasEOL?: boolean;
+      }
+    | unknown
+  >;
 }): string {
   const lines: string[] = [];
   let currentLine = "";
   let lastY: number | null = null;
+  let lastEndX: number | null = null;
+  let lastHeight = 10;
 
   for (const raw of textContent.items) {
-    const item = raw as { str?: string; transform?: number[]; hasEOL?: boolean };
+    const item = raw as {
+      str?: string;
+      transform?: number[];
+      width?: number;
+      height?: number;
+      hasEOL?: boolean;
+    };
     if (typeof item?.str !== "string") continue;
+    const str = item.str;
 
-    const y = Array.isArray(item.transform) ? item.transform[5] : null;
-    if (lastY !== null && y !== null && Math.abs(y - lastY) > 2.5) {
+    const x = Array.isArray(item.transform) ? Number(item.transform[4]) : 0;
+    const y = Array.isArray(item.transform) ? Number(item.transform[5]) : null;
+    const fontSize = Array.isArray(item.transform)
+      ? Math.abs(Number(item.transform[3] || item.transform[0]) || 0)
+      : 0;
+    const height = item.height || fontSize || lastHeight || 10;
+    const width =
+      item.width && item.width > 0 ? item.width : str.length * height * 0.45;
+
+    const newLine =
+      lastY !== null &&
+      y !== null &&
+      Math.abs(y - lastY) > Math.max(2.5, height * 0.35);
+
+    if (newLine) {
       if (currentLine.trim()) lines.push(currentLine.trimEnd());
       currentLine = "";
+      lastEndX = null;
     }
 
-    if (
-      currentLine &&
-      item.str &&
-      !currentLine.endsWith(" ") &&
-      !item.str.startsWith(" ")
-    ) {
-      currentLine += " ";
+    if (currentLine && str) {
+      const alreadySpaced = currentLine.endsWith(" ") || str.startsWith(" ");
+      if (!alreadySpaced) {
+        if (lastEndX != null && Number.isFinite(x)) {
+          const gap = x - lastEndX;
+          // Tracked/display letters sit closer than a real word space (~0.2em+).
+          if (gap > height * 0.18) currentLine += " ";
+        } else {
+          currentLine += " ";
+        }
+      }
     }
-    currentLine += item.str;
+    currentLine += str;
 
     if (item.hasEOL) {
       if (currentLine.trim()) lines.push(currentLine.trimEnd());
       currentLine = "";
       lastY = null;
+      lastEndX = null;
       continue;
     }
+
     lastY = y;
+    lastEndX = Number.isFinite(x) ? x + width : lastEndX;
+    lastHeight = height;
   }
 
   if (currentLine.trim()) lines.push(currentLine.trimEnd());
   return lines.join("\n").trim();
+}
+
+function resolveTextRepairPython(): TextRepairPython | null {
+  if (process.platform === "darwin") {
+    const mlxDir = path.join(AURA_ROOT, "qwen3-tts-apple-silicon");
+    const sitePackages = path.join(mlxDir, "site-packages");
+    const bundled = resolveBundledPython(AURA_ROOT);
+    if (bundled && fs.existsSync(sitePackages)) {
+      return { bin: bundled.bin, home: bundled.home, pythonPath: sitePackages };
+    }
+    const venvPython = path.join(mlxDir, ".venv", "bin", "python");
+    if (fs.existsSync(venvPython)) return { bin: venvPython };
+  }
+
+  const torchDir = path.join(AURA_ROOT, "tts", "torch");
+  const torchSite = path.join(torchDir, "site-packages");
+  const bundled = resolveBundledPython(AURA_ROOT);
+  if (bundled && fs.existsSync(torchSite)) {
+    return { bin: bundled.bin, home: bundled.home, pythonPath: torchSite };
+  }
+  const torchVenv = [
+    path.join(torchDir, ".venv", "bin", "python"),
+    path.join(torchDir, ".venv", "Scripts", "python.exe"),
+  ].find((p) => fs.existsSync(p));
+  if (torchVenv) return { bin: torchVenv };
+  return null;
 }
 
 /** Local PDF text extraction via pdf.js (no network / API key). */
@@ -1124,6 +1195,11 @@ async function extractDocumentText(options: {
   if (fileType === "pdf") {
     const extracted = await extractTextFromPdfLocal(fileData, start, end);
     let extractedText = sanitizeExtractedText(extracted.text);
+    extractedText = await repairExtractedTextWithModel(extractedText, {
+      auraRoot: AURA_ROOT,
+      dataDir: AURA_DATA_DIR,
+      python: resolveTextRepairPython(),
+    });
 
     if (!extractedText) {
       throw new Error(
@@ -1154,6 +1230,11 @@ async function extractDocumentText(options: {
     await fs.promises.writeFile(tempPath, Buffer.from(fileData, "base64"));
     let extractedText = await extractTextFromEpub(tempPath, start, end);
     extractedText = sanitizeExtractedText(extractedText);
+    extractedText = await repairExtractedTextWithModel(extractedText, {
+      auraRoot: AURA_ROOT,
+      dataDir: AURA_DATA_DIR,
+      python: resolveTextRepairPython(),
+    });
     if (!extractedText) {
       throw new Error(
         "O EPUB não possui conteúdo legível nas seções/capítulos selecionados."

@@ -254,6 +254,14 @@ function seedCommon() {
     fs.copyFileSync(envSrc, path.join(out, ".env"));
     console.log("[prepare-app-resources] Included .env seed");
   }
+
+  const repairSrc = path.join(root, "textRepair", "repair.py");
+  if (fs.existsSync(repairSrc)) {
+    const repairDst = path.join(out, "textRepair");
+    fs.mkdirSync(repairDst, { recursive: true });
+    fs.copyFileSync(repairSrc, path.join(repairDst, "repair.py"));
+    console.log("[prepare-app-resources] Bundled textRepair/repair.py");
+  }
 }
 
 function mlxSitePackages() {
