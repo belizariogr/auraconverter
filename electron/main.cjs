@@ -389,7 +389,7 @@ async function startBackend(auraRoot) {
   if (isDevProject && !hasTtsRuntimeReady(auraRoot)) {
     const hint =
       process.platform === "darwin"
-        ? "cd qwen3-tts-apple-silicon && python3.12 -m venv .venv && pip install -r requirements.txt"
+        ? "bun run setup:tts:mlx (Python portátil em build/cache)"
         : "veja tts/torch/README.md (python3.12 + requirements-*)";
     log(
       `TTS runtime ainda não configurado — o app sobe, mas a narração falha até criar o venv (${hint}).`

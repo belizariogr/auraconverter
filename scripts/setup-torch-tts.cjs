@@ -30,6 +30,27 @@ const TORCH_INDEX = {
   rocm: "https://download.pytorch.org/whl/rocm6.3",
 };
 
+function projectCacheEnv() {
+  const pipCache = path.join(cacheDir, "pip");
+  const tmp = path.join(cacheDir, "tmp");
+  const hf = path.join(cacheDir, "huggingface");
+  fs.mkdirSync(pipCache, { recursive: true });
+  fs.mkdirSync(tmp, { recursive: true });
+  fs.mkdirSync(hf, { recursive: true });
+  return {
+    ...process.env,
+    PIP_DISABLE_PIP_VERSION_CHECK: "1",
+    PIP_CACHE_DIR: pipCache,
+    TMPDIR: tmp,
+    TEMP: tmp,
+    TMP: tmp,
+    XDG_CACHE_HOME: cacheDir,
+    HF_HOME: hf,
+    HUGGINGFACE_HUB_CACHE: hf,
+    GIT_TERMINAL_PROMPT: "0",
+  };
+}
+
 function parseArgs(argv) {
   let accel = null;
   let force = false;
@@ -156,7 +177,7 @@ function runPip(py, args) {
   const r = spawnSync(py, ["-m", "pip", ...args], {
     cwd: torchSrc,
     stdio: "inherit",
-    env: { ...process.env, PIP_DISABLE_PIP_VERSION_CHECK: "1" },
+    env: projectCacheEnv(),
   });
   if (r.status !== 0) throw new Error(`pip failed: ${args.join(" ")}`);
 }
@@ -182,6 +203,7 @@ async function main() {
     const create = spawnSync(portable, ["-m", "venv", path.join(torchSrc, ".venv")], {
       cwd: torchSrc,
       stdio: "inherit",
+      env: projectCacheEnv(),
     });
     if (create.status !== 0) throw new Error("venv creation failed");
   }
@@ -234,7 +256,11 @@ from qwen_tts import Qwen3TTSModel
 print('qwen_tts ok')
 print('ok')
 `.trim();
-  execFileSync(py, ["-c", verify], { stdio: "inherit", cwd: torchSrc });
+  execFileSync(py, ["-c", verify], {
+    stdio: "inherit",
+    cwd: torchSrc,
+    env: projectCacheEnv(),
+  });
 
   console.log("\n[setup-torch-tts] Done. Restart: bun run electron:dev");
   console.log(`[setup-torch-tts] Smoke TTS: ${py} tts/torch/tts_server.py`);

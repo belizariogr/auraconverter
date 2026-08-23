@@ -47,6 +47,28 @@ import {
   pcmToMp3,
 } from "./mediaConvert";
 
+function resolveBundledPython(auraRoot: string): { bin: string; home: string } | null {
+  const envHome = process.env.AURA_PYTHON_HOME;
+  const homes = [
+    envHome,
+    path.join(auraRoot, "python", "Python.framework", "Versions", "3.12"),
+    path.join(auraRoot, "python"),
+  ].filter((h): h is string => Boolean(h));
+
+  const binNames = (home: string) => [
+    path.join(home, "bin", "python3.12"),
+    path.join(home, "bin", "python3"),
+    path.join(home, "bin", "python"),
+    path.join(home, "python.exe"),
+  ];
+
+  for (const home of homes) {
+    const bin = binNames(home).find((p) => fs.existsSync(p));
+    if (bin) return { bin, home };
+  }
+  return null;
+}
+
 /** Packaged app root (Resources/aura) or project cwd. */
 const AURA_ROOT = process.env.AURA_ROOT
   ? path.resolve(process.env.AURA_ROOT)
@@ -169,20 +191,17 @@ function resolveKokoroLaunch(): {
       AURA_KOKORO_BACKEND: "mlx",
     };
 
-    const pythonHome =
-      process.env.AURA_PYTHON_HOME ||
-      path.join(AURA_ROOT, "python", "Python.framework", "Versions", "3.12");
-    const bundledPython = path.join(pythonHome, "bin", "python3.12");
+    const bundled = resolveBundledPython(AURA_ROOT);
     const venvPython = path.join(mlxDir, ".venv", "bin", "python");
 
-    if (fs.existsSync(bundledPython) && fs.existsSync(sitePackages)) {
+    if (bundled && fs.existsSync(sitePackages)) {
       return {
-        command: bundledPython,
+        command: bundled.bin,
         args: [scriptName, "--host", "127.0.0.1", "--port", String(TTS_PORT)],
         cwd: ttsDir,
         env: {
           ...baseEnv,
-          PYTHONHOME: pythonHome,
+          PYTHONHOME: bundled.home,
           PYTHONPATH: sitePackages,
           PYTHONNOUSERSITE: "1",
         },
@@ -354,21 +373,18 @@ function resolveQwenLaunch(): {
     );
   }
 
-  // darwin / MLX
-  const pythonHome =
-    process.env.AURA_PYTHON_HOME ||
-    path.join(AURA_ROOT, "python", "Python.framework", "Versions", "3.12");
-  const bundledPython = path.join(pythonHome, "bin", "python3.12");
+  // darwin / MLX — portable CPython (build/app-resources/python) or legacy framework.
+  const bundled = resolveBundledPython(AURA_ROOT);
   const venvPython = path.join(ttsDir, ".venv", "bin", "python");
 
-  if (fs.existsSync(bundledPython) && fs.existsSync(sitePackages)) {
+  if (bundled && fs.existsSync(sitePackages)) {
     return {
-      command: bundledPython,
+      command: bundled.bin,
       args: ["tts_server.py", "--host", "127.0.0.1", "--port", String(TTS_PORT)],
       cwd: ttsDir,
       env: {
         ...baseEnv,
-        PYTHONHOME: pythonHome,
+        PYTHONHOME: bundled.home,
         PYTHONPATH: sitePackages,
         PYTHONNOUSERSITE: "1",
       },
@@ -1158,71 +1174,95 @@ async function extractDocumentText(options: {
   }
 }
 
-// Helper: Split text into natural chunks of maximum character count (approx. natural sentence/paragraph bounds)
-// Qwen lite works well with moderate length (~5–20s of speech ≈ 120–280 chars).
-// Pause markers (`...` or `<break time="…" />`) stay as their own chunks.
-function splitTextIntoChunks(text: string, maxChunkLength = 240): string[] {
-  const paragraphs = text.split(/\n+/);
-  const chunks: string[] = [];
-  let currentChunk = "";
+const PARAS_PER_CHUNK = 5;
+const MIN_PARAGRAPH_WORDS = 20;
 
-  for (const para of paragraphs) {
+function paragraphWordCount(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+/** Spoken lines that would sound odd if TTS saw them without the surrounding exchange. */
+function isDialogueLine(text: string): boolean {
+  return /^(?:[-–—―]|[“”"«»])/.test(text.trim());
+}
+
+function shouldAttachToPrevious(text: string, prev: string): boolean {
+  if (paragraphWordCount(text) < MIN_PARAGRAPH_WORDS) return true;
+  // Consecutive spoken lines stay in one prompt (question + reply, etc.).
+  return isDialogueLine(text) && isDialogueLine(prev);
+}
+
+/**
+ * Keep short lines / dialogue in the same TTS prompt as nearby text so the model
+ * has speaker context, then emit every 5 remaining paragraphs as one chunk.
+ */
+function splitTextIntoChunks(text: string): string[] {
+  const logical: string[] = [];
+
+  for (const para of text.split(/\n+/)) {
     const trimmed = para.trim();
     if (!trimmed) continue;
 
     if (isPauseLine(trimmed)) {
-      if (currentChunk) {
-        chunks.push(currentChunk);
-        currentChunk = "";
-      }
-      chunks.push(trimmed);
+      logical.push(trimmed);
       continue;
     }
 
-    if ((currentChunk + "\n" + trimmed).length <= maxChunkLength) {
-      currentChunk = currentChunk ? (currentChunk + "\n" + trimmed) : trimmed;
+    const prev = logical[logical.length - 1];
+    if (prev && !isPauseLine(prev) && shouldAttachToPrevious(trimmed, prev)) {
+      logical[logical.length - 1] = `${prev}\n${trimmed}`;
     } else {
-      if (currentChunk) {
-        chunks.push(currentChunk);
-      }
-      
-      if (trimmed.length > maxChunkLength) {
-        // Split by sentence boundaries
-        const sentences = trimmed.match(/[^.!?]+[.!?]+(\s|$)/g) || [trimmed];
-        currentChunk = "";
-        for (const sentence of sentences) {
-          const sTrimmed = sentence.trim();
-          if (!sTrimmed) continue;
-          if ((currentChunk + " " + sTrimmed).length <= maxChunkLength) {
-            currentChunk = currentChunk ? (currentChunk + " " + sTrimmed) : sTrimmed;
-          } else {
-            if (currentChunk) chunks.push(currentChunk);
-            if (sTrimmed.length > maxChunkLength) {
-              // Hard-split oversized sentences by words
-              const words = sTrimmed.split(/\s+/);
-              currentChunk = "";
-              for (const word of words) {
-                if ((currentChunk + " " + word).trim().length <= maxChunkLength) {
-                  currentChunk = currentChunk ? `${currentChunk} ${word}` : word;
-                } else {
-                  if (currentChunk) chunks.push(currentChunk);
-                  currentChunk = word;
-                }
-              }
-            } else {
-              currentChunk = sTrimmed;
-            }
-          }
-        }
-      } else {
-        currentChunk = trimmed;
-      }
+      logical.push(trimmed);
     }
   }
-  if (currentChunk) {
-    chunks.push(currentChunk);
+
+  const chunks: string[] = [];
+  let group: string[] = [];
+
+  const flushGroup = () => {
+    if (group.length === 0) return;
+    chunks.push(group.join("\n"));
+    group = [];
+  };
+
+  for (const item of logical) {
+    if (isPauseLine(item)) {
+      flushGroup();
+      chunks.push(item);
+      continue;
+    }
+    group.push(item);
+    if (group.length >= PARAS_PER_CHUNK) flushGroup();
   }
-  return chunks;
+  flushGroup();
+
+  const merged: string[] = [];
+  for (const chunk of chunks) {
+    if (isPauseLine(chunk)) {
+      merged.push(chunk);
+      continue;
+    }
+    const last = merged[merged.length - 1];
+    if (
+      last &&
+      !isPauseLine(last) &&
+      paragraphWordCount(chunk) < MIN_PARAGRAPH_WORDS
+    ) {
+      merged[merged.length - 1] = `${last}\n${chunk}`;
+    } else {
+      merged.push(chunk);
+    }
+  }
+  if (
+    merged.length >= 2 &&
+    !isPauseLine(merged[0]) &&
+    paragraphWordCount(merged[0]) < MIN_PARAGRAPH_WORDS &&
+    !isPauseLine(merged[1])
+  ) {
+    const [first, second, ...rest] = merged;
+    return [`${first}\n${second}`, ...rest];
+  }
+  return merged;
 }
 
 type NarrationArtifact = {
@@ -2406,8 +2446,7 @@ app.post("/api/narrate-stream", async (req, res) => {
       });
     }
 
-    // Split extracted text into logical chunks (Qwen prefers moderate-length prompts)
-    const textChunks = splitTextIntoChunks(extractedText, 240);
+    const textChunks = splitTextIntoChunks(extractedText);
     const totalChunks = textChunks.length;
 
     if (totalChunks === 0) {
@@ -2846,7 +2885,7 @@ app.post("/api/narrate", async (req, res) => {
       end,
     });
 
-    const textChunks = splitTextIntoChunks(extractedText, 240);
+    const textChunks = splitTextIntoChunks(extractedText);
     const engine = activeTtsEngine();
     let voiceAnchor: { refAudioPath: string; refText: string } | null = null;
     if (engine === "qwen3") {

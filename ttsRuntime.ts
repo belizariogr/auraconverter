@@ -112,72 +112,6 @@ function nodeBinary(): string {
   return "node";
 }
 
-function spawnOnce(
-  command: string,
-  args: string[],
-  opts: { cwd?: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {}
-): Promise<{ code: number; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: opts.cwd,
-      env: opts.env ? { ...process.env, ...opts.env } : process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    activeSetupChild = child;
-    let stderr = "";
-    const onAbort = () => {
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        // ignore
-      }
-    };
-    opts.signal?.addEventListener("abort", onAbort, { once: true });
-    child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (chunk: string) => {
-      stderr = (stderr + chunk).slice(-4000);
-    });
-    child.on("error", (err) => {
-      opts.signal?.removeEventListener("abort", onAbort);
-      if (activeSetupChild === child) activeSetupChild = null;
-      reject(err);
-    });
-    child.on("close", (code, signalName) => {
-      opts.signal?.removeEventListener("abort", onAbort);
-      if (activeSetupChild === child) activeSetupChild = null;
-      if (opts.signal?.aborted || signalName === "SIGTERM" || signalName === "SIGINT") {
-        reject(new Error("Preparação cancelada."));
-        return;
-      }
-      resolve({ code: code ?? 1, stderr });
-    });
-  });
-}
-
-async function resolveSystemPython312(): Promise<string> {
-  const candidates = [
-    "python3.12",
-    "/usr/bin/python3.12",
-    "/usr/local/bin/python3.12",
-    "/opt/homebrew/bin/python3.12",
-    "python3",
-  ];
-  for (const c of candidates) {
-    try {
-      const { code } = await spawnOnce(c, [
-        "-c",
-        "import sys; raise SystemExit(0 if sys.version_info[:2] >= (3, 12) else 1)",
-      ]);
-      if (code === 0) return c;
-    } catch {
-      // try next
-    }
-  }
-  throw new Error(
-    "Python 3.12+ não encontrado. Instale python3.12 (ex.: brew install python@3.12) e tente de novo."
-  );
-}
-
 async function runSetupScript(options: {
   scriptPath: string;
   label: string;
@@ -285,113 +219,22 @@ async function ensureMlxRuntime(options: {
   signal?: AbortSignal;
 }): Promise<void> {
   const { auraRoot, onEvent, signal } = options;
-  const ttsDir = path.join(auraRoot, "qwen3-tts-apple-silicon");
-  const req = path.join(ttsDir, "requirements.txt");
-  const venvPy = path.join(ttsDir, ".venv", "bin", "python");
-
-  if (!fs.existsSync(req)) {
+  const script = setupScriptPath(auraRoot, "setup-mlx-tts.cjs");
+  if (!script) {
     throw new Error(
-      `Runtime MLX ausente em ${ttsDir} e não há como instalar automaticamente neste pacote.`
+      "Runtime MLX ausente e scripts/setup-mlx-tts.cjs não encontrado. " +
+        "Em desenvolvimento: bun run setup:tts:mlx"
     );
   }
-
-  onEvent({
-    type: "runtime_start",
+  await runSetupScript({
+    scriptPath: script,
     label: "Qwen3 (MLX)",
-    phase: "Preparando runtime Qwen3 (MLX)…",
+    onEvent,
+    signal,
   });
-
-  const py = await resolveSystemPython312();
-
-  if (!fs.existsSync(venvPy)) {
-    onEvent({
-      type: "runtime_log",
-      label: "Qwen3 (MLX)",
-      phase: "Criando venv Python…",
-      line: `${py} -m venv .venv`,
-    });
-    const created = await spawnOnce(py, ["-m", "venv", path.join(ttsDir, ".venv")], {
-      cwd: ttsDir,
-      signal,
-    });
-    if (created.code !== 0) {
-      throw new Error(
-        `Falha ao criar venv MLX (exit ${created.code}).` +
-          (created.stderr ? `\n${created.stderr.trim()}` : "")
-      );
-    }
-  }
-
-  onEvent({
-    type: "runtime_log",
-    label: "Qwen3 (MLX)",
-    phase: "Instalando dependências MLX (pode demorar)…",
-    line: "pip install -r requirements.txt",
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(
-      venvPy,
-      ["-m", "pip", "install", "-r", "requirements.txt"],
-      {
-        cwd: ttsDir,
-        env: { ...process.env, PIP_DISABLE_PIP_VERSION_CHECK: "1" },
-        stdio: ["ignore", "pipe", "pipe"],
-      }
-    );
-    activeSetupChild = child;
-    const onAbort = () => {
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        // ignore
-      }
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-
-    let stderrTail = "";
-    const feed = (chunk: string, stream: "stdout" | "stderr") => {
-      if (stream === "stderr") stderrTail = (stderrTail + chunk).slice(-2000);
-      const line = chunk.trim().split(/\r?\n/).pop();
-      if (!line) return;
-      onEvent({
-        type: "runtime_log",
-        label: "Qwen3 (MLX)",
-        stream,
-        line: line.slice(0, 400),
-        phase: line.slice(0, 120),
-      });
-    };
-    child.stdout?.setEncoding("utf8");
-    child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (c: string) => feed(c, "stdout"));
-    child.stderr?.on("data", (c: string) => feed(c, "stderr"));
-
-    child.on("close", (code) => {
-      signal?.removeEventListener("abort", onAbort);
-      if (activeSetupChild === child) activeSetupChild = null;
-      if (signal?.aborted) reject(new Error("Preparação cancelada."));
-      else if (code !== 0) {
-        reject(
-          new Error(
-            `Falha ao instalar deps MLX (exit ${code}).` +
-              (stderrTail ? `\n${stderrTail.trim()}` : "")
-          )
-        );
-      } else resolve();
-    });
-    child.on("error", reject);
-  });
-
   if (!isQwenMlxRuntimeReady(auraRoot)) {
     throw new Error("Runtime MLX ainda incompleto após a instalação.");
   }
-
-  onEvent({
-    type: "runtime_done",
-    label: "Qwen3 (MLX)",
-    phase: "Runtime Qwen3 (MLX) pronto",
-  });
 }
 
 /**

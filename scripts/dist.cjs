@@ -8,9 +8,18 @@
 const { spawnSync } = require("child_process");
 const path = require("path");
 
+const fs = require("fs");
 const root = path.resolve(__dirname, "..");
 const accel = (process.env.AURA_TTS_ACCEL || "cuda").toLowerCase();
 const platform = process.platform;
+
+const electronCache = path.join(root, "build", "cache", "electron");
+const builderCache = path.join(root, "build", "cache", "electron-builder");
+fs.mkdirSync(electronCache, { recursive: true });
+fs.mkdirSync(builderCache, { recursive: true });
+process.env.electron_config_cache ||= electronCache;
+process.env.ELECTRON_CACHE ||= electronCache;
+process.env.ELECTRON_BUILDER_CACHE ||= builderCache;
 
 function run(cmd, args) {
   console.log(`[dist] ${cmd} ${args.join(" ")}`);

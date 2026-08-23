@@ -3,7 +3,7 @@
  *   build/app-resources/
  *     dist/
  *     bin/ffmpeg (+ ffprobe)    (static binaries for M4B / convert)
- *     python/…                  (framework on darwin; portable 3.12 on win/linux)
+ *     python/…                  (portable CPython 3.12; all OS, cached in build/cache)
  *     qwen3-tts-apple-silicon/  (darwin only)
  *     tts/torch/                (win32/linux only)
  *     tts-accel.json
@@ -99,6 +99,63 @@ const TORCH_INDEX = {
   cpu: "https://download.pytorch.org/whl/cpu",
   rocm: "https://download.pytorch.org/whl/rocm6.3",
 };
+
+function projectCacheEnv() {
+  const pipCache = path.join(cacheDir, "pip");
+  const tmp = path.join(cacheDir, "tmp");
+  const hf = path.join(cacheDir, "huggingface");
+  const electronCache = path.join(cacheDir, "electron");
+  fs.mkdirSync(pipCache, { recursive: true });
+  fs.mkdirSync(tmp, { recursive: true });
+  fs.mkdirSync(hf, { recursive: true });
+  fs.mkdirSync(electronCache, { recursive: true });
+  return {
+    ...process.env,
+    PIP_DISABLE_PIP_VERSION_CHECK: "1",
+    PIP_CACHE_DIR: pipCache,
+    TMPDIR: tmp,
+    TEMP: tmp,
+    TMP: tmp,
+    XDG_CACHE_HOME: cacheDir,
+    HF_HOME: hf,
+    HUGGINGFACE_HUB_CACHE: hf,
+    GIT_TERMINAL_PROMPT: "0",
+    electron_config_cache: process.env.electron_config_cache || electronCache,
+    ELECTRON_CACHE: process.env.ELECTRON_CACHE || electronCache,
+  };
+}
+
+/**
+ * `prepare` is also an npm/bun install lifecycle hook. Skip the heavy pack
+ * during install/add/ci so `bun install` stays fast. Explicit
+ * `bun run prepare` / `bun run prepare:mac` still runs (npm_command=run-script,
+ * or no npm_command).
+ */
+function shouldSkipLifecyclePrepare(argv) {
+  if (argv.some((a) => a.startsWith("--platform=") || a === "--pack")) {
+    return false;
+  }
+  if (process.env.AURA_PREPARE === "1" || process.env.AURA_PREPARE === "true") {
+    return false;
+  }
+  const cmd = process.env.npm_command;
+  return ["install", "ci", "add", "update", "remove", "unlink"].includes(cmd);
+}
+
+function ensureAppBuild() {
+  const server = path.join(root, "dist", "server.cjs");
+  const html = path.join(root, "dist", "index.html");
+  if (fs.existsSync(server) && fs.existsSync(html)) return;
+  console.log("[prepare-app-resources] dist/ missing — running bun run build:app");
+  const r = spawnSync("bun", ["run", "build:app"], {
+    cwd: root,
+    stdio: "inherit",
+    env: projectCacheEnv(),
+  });
+  if (r.status !== 0) {
+    throw new Error("[prepare-app-resources] bun run build:app failed");
+  }
+}
 
 function parseArgs(argv) {
   let platform = process.platform;
@@ -199,29 +256,50 @@ function seedCommon() {
   }
 }
 
-function resolveFrameworkDir(venvPython) {
-  mustExist(venvPython, "venv python");
-  const real = fs.realpathSync(venvPython);
-  const versions = path.resolve(real, "..", "..");
-  const framework = path.resolve(versions, "..", "..");
-  if (!framework.endsWith("Python.framework") || !fs.existsSync(framework)) {
-    throw new Error(
-      `[prepare-app-resources] Could not locate Python.framework from ${real}`
-    );
+function mlxSitePackages() {
+  const lib = path.join(qwenSrc, ".venv", "lib");
+  if (!fs.existsSync(lib)) {
+    return path.join(qwenSrc, ".venv", "lib", "python3.12", "site-packages");
   }
-  return framework;
+  const pyDirs = fs.readdirSync(lib).filter((n) => n.startsWith("python"));
+  const preferred = pyDirs.find((n) => n.includes("3.12")) || pyDirs[0];
+  if (!preferred) {
+    return path.join(qwenSrc, ".venv", "lib", "python3.12", "site-packages");
+  }
+  return path.join(lib, preferred, "site-packages");
 }
 
-function prepareDarwin() {
-  const venvPython = path.join(qwenSrc, ".venv", "bin", "python3.12");
-  const siteSrc = path.join(qwenSrc, ".venv", "lib", "python3.12", "site-packages");
-  mustExist(siteSrc, "venv site-packages");
-  mustExist(path.join(qwenSrc, "tts_server.py"), "tts_server.py");
+function ensureMlxVenv() {
+  console.log("[prepare-app-resources] Ensuring qwen3-tts-apple-silicon/.venv via setup-mlx-tts…");
+  const setup = spawnSync(
+    process.execPath,
+    [path.join(__dirname, "setup-mlx-tts.cjs")],
+    { cwd: root, stdio: "inherit", env: projectCacheEnv() }
+  );
+  if (setup.status !== 0) {
+    throw new Error("setup-mlx-tts.cjs failed while preparing MLX runtime");
+  }
+}
 
-  const frameworkSrc = resolveFrameworkDir(venvPython);
-  const frameworkDst = path.join(out, "python", "Python.framework");
-  console.log("[prepare-app-resources] Copying Python.framework from", frameworkSrc);
-  fs.cpSync(frameworkSrc, frameworkDst, { recursive: true, dereference: true });
+async function prepareDarwin() {
+  mustExist(path.join(qwenSrc, "tts_server.py"), "tts_server.py");
+  mustExist(path.join(kokoroSrc, "tts_server_mlx.py"), "tts/kokoro/tts_server_mlx.py");
+  mustExist(path.join(kokoroSrc, "tts_server.py"), "tts/kokoro/tts_server.py");
+
+  const { pythonPrefix } = await ensurePortablePython("darwin");
+  ensureMlxVenv();
+  ensureKokoroVenv("darwin", "cpu");
+
+  const siteSrc = mlxSitePackages();
+  mustExist(siteSrc, "venv site-packages");
+  if (!fs.existsSync(path.join(siteSrc, "misaki"))) {
+    throw new Error(
+      "[prepare-app-resources] misaki missing from MLX site-packages after setup-mlx-tts"
+    );
+  }
+
+  const pyBin = bundlePortablePython(pythonPrefix);
+  console.log("[prepare-app-resources] Bundled python:", pyBin);
 
   const qwenDst = path.join(out, "qwen3-tts-apple-silicon");
   fs.mkdirSync(qwenDst, { recursive: true });
@@ -230,29 +308,11 @@ function prepareDarwin() {
     if (fs.existsSync(src)) fs.copyFileSync(src, path.join(qwenDst, file));
   }
   console.log("[prepare-app-resources] Skipping models/ (downloaded on first launch)");
-  console.log("[prepare-app-resources] Copying site-packages...");
+  console.log("[prepare-app-resources] Copying MLX site-packages...");
   copyFiltered(siteSrc, path.join(qwenDst, "site-packages"));
 
-  // Ship both Kokoro backends: MLX plus full-quality ONNX/Core ML.
-  mustExist(path.join(kokoroSrc, "tts_server_mlx.py"), "tts/kokoro/tts_server_mlx.py");
-  mustExist(path.join(kokoroSrc, "tts_server.py"), "tts/kokoro/tts_server.py");
-  if (!fs.existsSync(path.join(siteSrc, "misaki"))) {
-    throw new Error(
-      "[prepare-app-resources] misaki missing from MLX site-packages. " +
-        "Install deps: cd qwen3-tts-apple-silicon && .venv/bin/pip install -r requirements.txt"
-    );
-  }
-  const kokoroOnnxSiteSrc = path.join(
-    kokoroSrc,
-    ".venv",
-    "lib",
-    "python3.12",
-    "site-packages"
-  );
-  mustExist(
-    kokoroOnnxSiteSrc,
-    "Kokoro ONNX site-packages (run: bun run setup:tts:kokoro)"
-  );
+  const kokoroOnnxSiteSrc = kokoroSitePackages("darwin");
+  mustExist(kokoroOnnxSiteSrc, "tts/kokoro/.venv site-packages");
   const kokoroDst = path.join(out, "tts", "kokoro");
   fs.mkdirSync(kokoroDst, { recursive: true });
   for (const file of [
@@ -267,16 +327,15 @@ function prepareDarwin() {
   copyFiltered(kokoroOnnxSiteSrc, path.join(kokoroDst, "site-packages"));
   console.log("[prepare-app-resources] Bundled Kokoro MLX + ONNX/Core ML runtimes");
 
-  const pyBin = path.join(frameworkDst, "Versions", "3.12", "bin", "python3.12");
-  mustExist(pyBin, "bundled python3.12");
+  const pythonHome = path.join(out, "python");
   try {
     execFileSync(
       pyBin,
       ["-c", "import fastapi, uvicorn, mlx, mlx_audio, misaki; print('ok', fastapi.__version__)"],
       {
         env: {
-          ...process.env,
-          PYTHONHOME: path.join(frameworkDst, "Versions", "3.12"),
+          ...projectCacheEnv(),
+          PYTHONHOME: pythonHome,
           PYTHONPATH: path.join(qwenDst, "site-packages"),
           PYTHONNOUSERSITE: "1",
         },
@@ -291,8 +350,8 @@ function prepareDarwin() {
       ],
       {
         env: {
-          ...process.env,
-          PYTHONHOME: path.join(frameworkDst, "Versions", "3.12"),
+          ...projectCacheEnv(),
+          PYTHONHOME: pythonHome,
           PYTHONPATH: path.join(kokoroDst, "site-packages"),
           PYTHONNOUSERSITE: "1",
         },
@@ -311,6 +370,9 @@ function pbsAssetName(platform) {
   const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
   if (platform === "win32") {
     return `cpython-${PBS_VERSION}+${PBS_TAG}-${arch}-pc-windows-msvc-install_only.tar.gz`;
+  }
+  if (platform === "darwin") {
+    return `cpython-${PBS_VERSION}+${PBS_TAG}-${arch}-apple-darwin-install_only.tar.gz`;
   }
   if (platform === "linux") {
     return `cpython-${PBS_VERSION}+${PBS_TAG}-${arch}-unknown-linux-gnu-install_only.tar.gz`;
@@ -488,7 +550,7 @@ function runPip(pythonBin, args) {
   const result = spawnSync(pythonBin, ["-m", "pip", ...args], {
     cwd: torchSrc,
     stdio: "inherit",
-    env: { ...process.env, PIP_DISABLE_PIP_VERSION_CHECK: "1" },
+    env: projectCacheEnv(),
   });
   if (result.status !== 0) {
     throw new Error(`pip failed: ${args.join(" ")}`);
@@ -607,7 +669,7 @@ function ensureKokoroVenv(platform, accel = "cpu") {
   const setup = spawnSync(
     process.execPath,
     [path.join(__dirname, "setup-kokoro-tts.cjs"), `--accel=${kokoroAccel}`],
-    { cwd: root, stdio: "inherit", env: process.env }
+    { cwd: root, stdio: "inherit", env: projectCacheEnv() }
   );
   if (setup.status !== 0) {
     throw new Error("setup-kokoro-tts.cjs failed while preparing Kokoro runtime");
@@ -709,10 +771,19 @@ async function prepareWinLinux(platform, accel) {
 }
 
 async function main() {
-  const { platform, accel } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  if (shouldSkipLifecyclePrepare(argv)) {
+    console.log(
+      "[prepare-app-resources] Skipping pack during package install. Run: bun run prepare"
+    );
+    return;
+  }
+
+  const { platform, accel } = parseArgs(argv);
   console.log(
     `[prepare-app-resources] Preparing ${out} (platform=${platform}, accel=${accel})`
   );
+  ensureAppBuild();
   removeDirRobust(out);
   fs.mkdirSync(out, { recursive: true });
 
@@ -721,7 +792,7 @@ async function main() {
   await bundleFfmpeg(platform);
 
   if (platform === "darwin") {
-    prepareDarwin();
+    await prepareDarwin();
   } else {
     await prepareWinLinux(platform, accel);
   }

@@ -29,6 +29,27 @@ const ROCM_ORT_FIND_LINKS = [
   "https://repo.radeon.com/rocm/manylinux/rocm-rel-6.3.4/",
 ];
 
+function projectCacheEnv() {
+  const pipCache = path.join(cacheDir, "pip");
+  const tmp = path.join(cacheDir, "tmp");
+  const hf = path.join(cacheDir, "huggingface");
+  fs.mkdirSync(pipCache, { recursive: true });
+  fs.mkdirSync(tmp, { recursive: true });
+  fs.mkdirSync(hf, { recursive: true });
+  return {
+    ...process.env,
+    PIP_DISABLE_PIP_VERSION_CHECK: "1",
+    PIP_CACHE_DIR: pipCache,
+    TMPDIR: tmp,
+    TEMP: tmp,
+    TMP: tmp,
+    XDG_CACHE_HOME: cacheDir,
+    HF_HOME: hf,
+    HUGGINGFACE_HUB_CACHE: hf,
+    GIT_TERMINAL_PROMPT: "0",
+  };
+}
+
 function parseArgs(argv) {
   let force = false;
   let accel = "auto";
@@ -140,7 +161,7 @@ function runPip(py, args) {
   const r = spawnSync(py, ["-m", "pip", ...args], {
     cwd: kokoroSrc,
     stdio: "inherit",
-    env: { ...process.env, PIP_DISABLE_PIP_VERSION_CHECK: "1" },
+    env: projectCacheEnv(),
   });
   if (r.status !== 0) throw new Error(`pip failed: ${args.join(" ")}`);
 }
@@ -274,6 +295,7 @@ async function main() {
     const create = spawnSync(portable, ["-m", "venv", path.join(kokoroSrc, ".venv")], {
       cwd: kokoroSrc,
       stdio: "inherit",
+      env: projectCacheEnv(),
     });
     if (create.status !== 0) throw new Error("venv creation failed");
   }
@@ -295,7 +317,7 @@ async function main() {
       "import fastapi, uvicorn, onnxruntime as ort; import kokoro_onnx; "
       + "print('ok', ort.__version__, ort.get_available_providers())",
     ],
-    { stdio: "inherit", cwd: kokoroSrc }
+    { stdio: "inherit", cwd: kokoroSrc, env: projectCacheEnv() }
   );
 
   if (accel === "rocm") {

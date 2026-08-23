@@ -8,6 +8,15 @@ const os = require("os");
 const path = require("path");
 
 const root = path.resolve(__dirname, "..");
+const projectElectronCache = path.join(root, "build", "cache", "electron");
+fs.mkdirSync(projectElectronCache, { recursive: true });
+if (!process.env.electron_config_cache) {
+  process.env.electron_config_cache = projectElectronCache;
+}
+if (!process.env.ELECTRON_CACHE) {
+  process.env.ELECTRON_CACHE = projectElectronCache;
+}
+
 const electronDir = path.join(root, "node_modules", "electron");
 const distDir = path.join(electronDir, "dist");
 const pathTxt = path.join(electronDir, "path.txt");

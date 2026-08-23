@@ -93,6 +93,8 @@ function amdGpuHint(missing: string[]): string {
 function mlxPython(auraRoot: string): string | null {
   const candidates = [
     path.join(auraRoot, "qwen3-tts-apple-silicon", ".venv", "bin", "python"),
+    path.join(auraRoot, "python", "bin", "python3.12"),
+    path.join(auraRoot, "python", "bin", "python3"),
     path.join(
       auraRoot,
       "python",
