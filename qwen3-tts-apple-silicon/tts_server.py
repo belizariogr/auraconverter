@@ -495,6 +495,15 @@ def synthesize(
     return np.concatenate(chunks), sample_rate, use_icl
 
 
+def _mlx_version() -> str:
+    try:
+        from importlib.metadata import version
+
+        return version("mlx")
+    except Exception:
+        return "?"
+
+
 def _env_flag(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None:
@@ -516,7 +525,8 @@ async def lifespan(app: FastAPI):
             print(
                 f"[qwen-tts] Server ready (preloaded model={DEFAULT_MODEL_FOLDER}, "
                 f"type={model_tts_type}, icl={model_icl_capable}, "
-                f"defaultVoice={DEFAULT_VOICE}, previews={VOICE_PREVIEW_DIR})"
+                f"mlx={_mlx_version()}, defaultVoice={DEFAULT_VOICE}, "
+                f"previews={VOICE_PREVIEW_DIR})"
             )
         except Exception as exc:
             print(f"[qwen-tts] WARNING: model preload failed: {exc}")
@@ -524,7 +534,8 @@ async def lifespan(app: FastAPI):
     else:
         print(
             f"[qwen-tts] Server ready (lazy model load; model={DEFAULT_MODEL_FOLDER}, "
-            f"defaultVoice={DEFAULT_VOICE}, previews={VOICE_PREVIEW_DIR})"
+            f"mlx={_mlx_version()}, defaultVoice={DEFAULT_VOICE}, "
+            f"previews={VOICE_PREVIEW_DIR})"
         )
     server_ready = True
     yield

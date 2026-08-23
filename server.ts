@@ -1257,6 +1257,11 @@ async function extractDocumentText(options: {
 
 const PARAS_PER_CHUNK = 5;
 const MIN_PARAGRAPH_WORDS = 20;
+/**
+ * Qwen 0.6B + M5 NAX drop the middle of long prompts (mlx-audio#464).
+ * Keep each generate() to ~one short paragraph. Kokoro still uses 5 paras.
+ */
+const QWEN_MAX_CHUNK_CHARS = 280;
 
 function paragraphWordCount(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
@@ -1276,8 +1281,52 @@ function shouldAttachToPrevious(text: string, prev: string): boolean {
 /**
  * Keep short lines / dialogue in the same TTS prompt as nearby text so the model
  * has speaker context, then emit every 5 remaining paragraphs as one chunk.
+ * Qwen additionally splits oversized packs so 0.6B does not drop the middle.
  */
-function splitTextIntoChunks(text: string): string[] {
+function splitOversizedChunk(text: string, maxChars: number): string[] {
+  const trimmed = text.trim();
+  if (trimmed.length <= maxChars) return [trimmed];
+
+  const sentences = trimmed.match(/[^.!?…]+[.!?…]+(?:\s+|$)|[^.!?…]+$/g) || [trimmed];
+  const out: string[] = [];
+  let current = "";
+
+  const pushWords = (s: string) => {
+    const words = s.split(/\s+/).filter(Boolean);
+    let buf = "";
+    for (const word of words) {
+      const next = buf ? `${buf} ${word}` : word;
+      if (next.length <= maxChars) {
+        buf = next;
+      } else {
+        if (buf) out.push(buf);
+        buf = word;
+      }
+    }
+    if (buf) current = buf;
+  };
+
+  for (const sentence of sentences) {
+    const s = sentence.trim();
+    if (!s) continue;
+    const next = current ? `${current} ${s}` : s;
+    if (next.length <= maxChars) {
+      current = next;
+      continue;
+    }
+    if (current) out.push(current);
+    current = "";
+    if (s.length <= maxChars) current = s;
+    else pushWords(s);
+  }
+  if (current) out.push(current);
+  return out.length > 0 ? out : [trimmed];
+}
+
+function splitTextIntoChunks(
+  text: string,
+  engine: TtsEngineId = activeTtsEngine()
+): string[] {
   const logical: string[] = [];
 
   for (const para of text.split(/\n+/)) {
@@ -1334,6 +1383,7 @@ function splitTextIntoChunks(text: string): string[] {
       merged.push(chunk);
     }
   }
+  let packed = merged;
   if (
     merged.length >= 2 &&
     !isPauseLine(merged[0]) &&
@@ -1341,9 +1391,14 @@ function splitTextIntoChunks(text: string): string[] {
     !isPauseLine(merged[1])
   ) {
     const [first, second, ...rest] = merged;
-    return [`${first}\n${second}`, ...rest];
+    packed = [`${first}\n${second}`, ...rest];
   }
-  return merged;
+  if (engine === "qwen3") {
+    return packed.flatMap((c) =>
+      isPauseLine(c) ? [c] : splitOversizedChunk(c, QWEN_MAX_CHUNK_CHARS)
+    );
+  }
+  return packed;
 }
 
 type NarrationArtifact = {
@@ -2527,7 +2582,8 @@ app.post("/api/narrate-stream", async (req, res) => {
       });
     }
 
-    const textChunks = splitTextIntoChunks(extractedText);
+    const engine = activeTtsEngine();
+    const textChunks = splitTextIntoChunks(extractedText, engine);
     const totalChunks = textChunks.length;
 
     if (totalChunks === 0) {
@@ -2544,7 +2600,6 @@ app.post("/api/narrate-stream", async (req, res) => {
     });
 
     // Qwen: ensure preview WAV+TXT for ICL. Kokoro: speaker id only.
-    const engine = activeTtsEngine();
     let voiceAnchor: { refAudioPath: string; refText: string } | null = null;
     if (engine === "qwen3") {
       sendEvent({
@@ -2958,8 +3013,8 @@ app.post("/api/narrate", async (req, res) => {
       end,
     });
 
-    const textChunks = splitTextIntoChunks(extractedText);
     const engine = activeTtsEngine();
+    const textChunks = splitTextIntoChunks(extractedText, engine);
     let voiceAnchor: { refAudioPath: string; refText: string } | null = null;
     if (engine === "qwen3") {
       voiceAnchor = await ensureVoicePreview(voice);
