@@ -206,6 +206,25 @@ function pcmDurationSeconds(pcmPath: string, sampleRate: number): Promise<number
   return fs.promises.stat(pcmPath).then((stat) => stat.size / (sampleRate * 2));
 }
 
+/** Books/QuickTime treat extra JPEG tracks as video. Mux a single front cover. */
+function frontCoverPaths(paths: string[] | undefined): string[] {
+  const found = (paths || []).find((p) => p && fs.existsSync(p));
+  return found ? [found] : [];
+}
+
+function pushCoverEncodeArgs(args: string[]): void {
+  args.push(
+    "-c:v",
+    "mjpeg",
+    "-disposition:v:0",
+    "attached_pic",
+    "-metadata:s:v:0",
+    "title=Cover",
+    "-metadata:s:v:0",
+    "comment=Cover (front)"
+  );
+}
+
 /**
  * MP3/AAC use fixed block sizes in samples, so at 24 kHz each block spans twice
  * as much time as at 48 kHz and plosives ("t", "k") smear into a "ch"-like
@@ -268,7 +287,7 @@ export async function pcmToM4b(opts: {
   const out = opts.outputPath || uniqueMediaPath("m4b");
   const sampleRate = opts.sampleRate || 24000;
   const totalSec = await pcmDurationSeconds(opts.pcmPath, sampleRate);
-  const artworks = (opts.artworkPaths || []).filter((p) => p && fs.existsSync(p));
+  const artworks = frontCoverPaths(opts.artworkPaths);
   const args = [
     "-f",
     "s16le",
@@ -297,10 +316,7 @@ export async function pcmToM4b(opts: {
     "-aac_coder",
     "twoloop"
   );
-  if (artworks.length > 0) args.push("-c:v", "mjpeg");
-  for (let i = 0; i < artworks.length; i++) {
-    args.push(`-disposition:v:${i}`, "attached_pic");
-  }
+  if (artworks.length > 0) pushCoverEncodeArgs(args);
   if (opts.title) args.push("-metadata", `title=${opts.title}`);
   args.push("-movflags", "+faststart", "-f", "mp4", out);
 
@@ -322,7 +338,7 @@ export async function mp3ToM4b(opts: {
 }): Promise<string> {
   await ensureFfmpeg();
   const out = opts.outputPath || uniqueMediaPath("m4b");
-  const artworks = (opts.artworkPaths || []).filter((p) => p && fs.existsSync(p));
+  const artworks = frontCoverPaths(opts.artworkPaths);
   const totalSec = await probeDurationSeconds(opts.mp3Path);
 
   const args: string[] = ["-i", opts.mp3Path];
@@ -339,11 +355,7 @@ export async function mp3ToM4b(opts: {
 
   args.push("-c:a", "aac", "-b:a", "192k", "-aac_coder", "twoloop");
   if (artworks.length > 0) {
-    args.push("-c:v", "mjpeg");
-  }
-
-  for (let i = 0; i < artworks.length; i++) {
-    args.push(`-disposition:v:${i}`, "attached_pic");
+    pushCoverEncodeArgs(args);
   }
 
   if (opts.title) {

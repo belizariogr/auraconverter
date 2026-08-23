@@ -13,7 +13,7 @@ import argparse
 import base64
 import os
 import threading
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any, Optional
 
 import numpy as np
@@ -203,6 +203,36 @@ def resolve_voice_arg(voice: str) -> str:
     return voice
 
 
+@contextmanager
+def _hold_mlx_cache():
+    """Skip mlx-audio's mx.clear_cache() after every Kokoro segment.
+
+    generate() wipes the Metal cache between newline/phoneme windows. On M5
+    that recycles Neural Accelerator buffers with leftover data — first
+    window OK, the next one sounds destroyed. M2 is unaffected.
+    """
+    try:
+        import mlx.core as mx
+    except ImportError:
+        yield
+        return
+    if not hasattr(mx, "clear_cache"):
+        yield
+        return
+    original = mx.clear_cache
+    mx.clear_cache = lambda: None  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        mx.clear_cache = original  # type: ignore[method-assign]
+        try:
+            if hasattr(mx, "synchronize"):
+                mx.synchronize()
+            original()
+        except Exception:
+            pass
+
+
 def synthesize(
     text: str, voice: str, speed: float, job_id: Optional[str] = None
 ) -> tuple[np.ndarray, int]:
@@ -210,17 +240,19 @@ def synthesize(
     chunks: list[np.ndarray] = []
     sample_rate = DEFAULT_SAMPLE_RATE
     voice_arg = resolve_voice_arg(voice)
-    for result in model.generate(
-        text,
-        voice=voice_arg,
-        speed=speed,
-        lang_code=DEFAULT_LANG,
-        split_pattern=r"\n+",
-    ):
-        if job_cancelled(job_id):
-            break
-        sample_rate = int(getattr(result, "sample_rate", None) or sample_rate)
-        chunks.append(_to_numpy(result.audio))
+    # Do not split on newlines: each split is a new generate window + cache wipe.
+    with _hold_mlx_cache():
+        for result in model.generate(
+            text,
+            voice=voice_arg,
+            speed=speed,
+            lang_code=DEFAULT_LANG,
+            split_pattern=None,
+        ):
+            if job_cancelled(job_id):
+                break
+            sample_rate = int(getattr(result, "sample_rate", None) or sample_rate)
+            chunks.append(_to_numpy(result.audio))
     if not chunks:
         raise RuntimeError("Kokoro MLX produced empty audio.")
     return np.concatenate(chunks), sample_rate

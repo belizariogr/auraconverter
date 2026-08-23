@@ -2794,7 +2794,6 @@ app.post("/api/narrate-stream", async (req, res) => {
 
     // Extract cover JPEG when requested
     let coverPath: string | null = null;
-    let artworkPaths: string[] = [];
     if (includeCover && activeData) {
       try {
         if (type === "pdf" && coverPageNum != null) {
@@ -2804,12 +2803,10 @@ app.post("/api/narrate-stream", async (req, res) => {
             coverPage: coverPageNum,
           });
           coverPath = cover.jpegPath;
-          artworkPaths = [cover.jpegPath];
         } else if (type === "epub") {
           const bytes = Buffer.from(activeData, "base64");
-          const { coverJpegPath, artworks } = await extractEpubImages(bytes);
+          const { coverJpegPath } = await extractEpubImages(bytes);
           coverPath = coverJpegPath;
-          artworkPaths = artworks.length > 0 ? artworks : coverJpegPath ? [coverJpegPath] : [];
         }
       } catch (coverErr: any) {
         console.warn(`[NarrateStream] Cover extraction skipped:`, coverErr?.message || coverErr);
@@ -2831,12 +2828,7 @@ app.post("/api/narrate-stream", async (req, res) => {
           pcmPath,
           outputPath: m4bPath,
           sampleRate,
-          artworkPaths:
-            type === "epub"
-              ? artworkPaths
-              : coverPath
-                ? [coverPath]
-                : [],
+          artworkPaths: coverPath ? [coverPath] : [],
           title: bookStem,
           onProgress: (p) => {
             const pct = p.percent != null ? Math.round(p.percent) : null;

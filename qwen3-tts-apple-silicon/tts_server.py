@@ -13,15 +13,13 @@ import base64
 import gc
 import os
 import threading
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from typing import Optional
 
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 from mlx_audio.tts.utils import load_model
 
@@ -366,6 +364,31 @@ def unload_model() -> bool:
         return True
 
 
+@contextmanager
+def _hold_mlx_cache():
+    """Skip mlx-audio's mid-generate mx.clear_cache().
+
+    On M5, wiping the Metal cache between tokens/segments recycles Neural
+    Accelerator buffers that still hold leftover data. M2 does not use those
+    kernels, which is why the same project sounds fine there.
+    """
+    if mx is None or not hasattr(mx, "clear_cache"):
+        yield
+        return
+    original = mx.clear_cache
+    mx.clear_cache = lambda: None  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        mx.clear_cache = original  # type: ignore[method-assign]
+        try:
+            if hasattr(mx, "synchronize"):
+                mx.synchronize()
+            original()
+        except Exception:
+            pass
+
+
 def synthesize(
     text: str,
     voice: str,
@@ -413,43 +436,47 @@ def synthesize(
         f"ref={ref_audio_path or '-'}"
     )
 
-    if use_icl:
-        # Full ICL: identity comes from the preview WAV of the selected voice.
-        results = list(
-            model.generate(
+    # mlx-audio calls mx.clear_cache() after every codec token. On M5 that
+    # recycles Neural Accelerator buffers with leftover data — first chunk OK,
+    # the next one sounds destroyed. Hold the wipe until this generate finishes.
+    with _hold_mlx_cache():
+        if use_icl:
+            # Full ICL: identity comes from the preview WAV of the selected voice.
+            results = list(
+                model.generate(
+                    text=text,
+                    voice=voice,
+                    ref_audio=ref_audio_path,
+                    ref_text=ref_text,
+                    lang_code=language,
+                    temperature=temperature,
+                    verbose=False,
+                )
+            )
+        elif has_ref and model_tts_type == "base":
+            # Encoder missing: still pass ref_audio so speaker_encoder x-vector anchors tone.
+            results = list(
+                model.generate(
+                    text=text,
+                    voice=voice,
+                    ref_audio=ref_audio_path,
+                    ref_text=ref_text,
+                    lang_code=language,
+                    temperature=temperature,
+                    verbose=False,
+                )
+            )
+        else:
+            gen_kwargs = dict(
                 text=text,
                 voice=voice,
-                ref_audio=ref_audio_path,
-                ref_text=ref_text,
                 lang_code=language,
                 temperature=temperature,
                 verbose=False,
             )
-        )
-    elif has_ref and model_tts_type == "base":
-        # Encoder missing: still pass ref_audio so speaker_encoder x-vector anchors tone.
-        results = list(
-            model.generate(
-                text=text,
-                voice=voice,
-                ref_audio=ref_audio_path,
-                ref_text=ref_text,
-                lang_code=language,
-                temperature=temperature,
-                verbose=False,
-            )
-        )
-    else:
-        gen_kwargs = dict(
-            text=text,
-            voice=voice,
-            lang_code=language,
-            temperature=temperature,
-            verbose=False,
-        )
-        if model_tts_type == "custom_voice":
-            gen_kwargs["instruct"] = instruct
-        results = list(model.generate(**gen_kwargs))
+            if model_tts_type == "custom_voice":
+                gen_kwargs["instruct"] = instruct
+            results = list(model.generate(**gen_kwargs))
 
     if not results:
         return np.zeros(0, dtype=np.float32), model_sample_rate, use_icl

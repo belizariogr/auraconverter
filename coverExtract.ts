@@ -128,15 +128,26 @@ function parseOpf(opfXml: string, opfDir: string): OpfParsed {
     const mediaType = attrs.match(/\bmedia-type=["']([^"']+)["']/i)?.[1] || "";
     const properties = attrs.match(/\bproperties=["']([^"']+)["']/i)?.[1] || "";
     if (!href || !mediaType.startsWith("image/")) continue;
+    const props = properties.split(/\s+/);
     const isCover =
-      properties.split(/\s+/).includes("cover-image") ||
-      (coverId != null && id === coverId);
+      props.includes("cover-image") ||
+      props.includes("cover-image") ||
+      props.includes("cover-image") ||
+      (coverId != null &&
+        (id === coverId ||
+          href === coverId ||
+          path.basename(href) === coverId ||
+          path.basename(href) === `${coverId}.jpg` ||
+          path.basename(href) === `${coverId}.jpeg` ||
+          path.basename(href) === `${coverId}.png`));
     if (isCover) coverHref = href;
     images.push({ href, mediaType, isCover });
   }
 
   if (!coverHref && images.length > 0) {
-    const named = images.find((i) => /cover/i.test(i.href));
+    const named = images.find(
+      (i) => /cover|capa|front/i.test(i.href) || /cover|capa|front/i.test(path.basename(i.href))
+    );
     if (named) {
       named.isCover = true;
       coverHref = named.href;
@@ -205,33 +216,120 @@ export async function extractEpubImages(
   const parsed = parseOpf(opfXml, opfDir);
 
   const artworks: string[] = [];
-  let coverJpegPath: string | null = null;
+  const candidates: CoverCandidate[] = [];
 
-  for (const img of parsed.images) {
+  const coverRank = (img: { href: string; isCover: boolean }): number => {
+    if (img.isCover || img.href === parsed.coverHref) return 0;
+    if (/cover|capa|front|jacket/i.test(path.basename(img.href))) return 1;
+    return 2;
+  };
+
+  const ordered = parsed.images.slice().sort((a, b) => coverRank(a) - coverRank(b));
+
+  const tryConvert = async (img: (typeof parsed.images)[number]): Promise<void> => {
     const src = resolveZipPath(opfDir, img.href);
-    if (!fs.existsSync(src)) continue;
+    if (!fs.existsSync(src)) return;
     try {
       const jpeg = await convertImageToJpeg(src);
-      // Skip tiny icons (< 64px on either side) — probe via ffprobe if available, else keep
       const dims = await probeImageSize(jpeg);
       if (dims && (dims.width < 64 || dims.height < 64)) {
         await fs.promises.unlink(jpeg).catch(() => undefined);
-        continue;
+        return;
       }
       artworks.push(jpeg);
-      if (img.isCover || (!coverJpegPath && img.href === parsed.coverHref)) {
-        coverJpegPath = jpeg;
-      }
+      candidates.push({
+        jpeg,
+        href: img.href,
+        isCover: Boolean(img.isCover || img.href === parsed.coverHref),
+        width: dims?.width || 0,
+        height: dims?.height || 0,
+      });
     } catch (err) {
       console.warn(`[Cover] Skip EPUB image ${img.href}:`, (err as Error)?.message || err);
     }
+  };
+
+  const hasUsableCover = (): boolean => {
+    const pick = pickBestCoverJpeg(candidates);
+    if (!pick) return false;
+    const c = candidates.find((x) => x.jpeg === pick);
+    return Boolean(c && coverIsLargeEnough(c));
+  };
+
+  const rank01 = ordered.filter((img) => coverRank(img) <= 1);
+  const rank2 = ordered.filter((img) => coverRank(img) >= 2);
+  rank2.sort((a, b) => {
+    const sizeOf = (href: string) => {
+      const src = resolveZipPath(opfDir, href);
+      try {
+        return fs.existsSync(src) ? fs.statSync(src).size : 0;
+      } catch {
+        return 0;
+      }
+    };
+    return sizeOf(b.href) - sizeOf(a.href);
+  });
+
+  for (const img of [...rank01, ...rank2]) {
+    if (hasUsableCover()) break;
+    await tryConvert(img);
   }
 
-  if (!coverJpegPath && artworks.length > 0) {
-    coverJpegPath = artworks[0];
-  }
+  const coverJpegPath = pickBestCoverJpeg(candidates);
 
-  return { extractDir, coverJpegPath, artworks };
+  return {
+    extractDir,
+    coverJpegPath,
+    artworks: coverJpegPath ? [coverJpegPath] : artworks.slice(0, 1),
+  };
+}
+
+type CoverCandidate = {
+  jpeg: string;
+  href: string;
+  isCover: boolean;
+  width: number;
+  height: number;
+};
+
+function coverIsLargeEnough(c: CoverCandidate): boolean {
+  return Math.min(c.width, c.height) >= 200 || c.width * c.height >= 80_000;
+}
+
+/**
+ * Books / iTunes show the first attached_pic. OPF order is often a logo or
+ * publisher mark, not the jacket. Prefer the declared cover when it is large
+ * enough; otherwise the largest portrait/square JPEG.
+ */
+function pickBestCoverJpeg(candidates: CoverCandidate[]): string | null {
+  if (candidates.length === 0) return null;
+
+  const declared = candidates.find((c) => c.isCover && coverIsLargeEnough(c));
+  if (declared) return declared.jpeg;
+
+  const named = candidates.find(
+    (c) =>
+      coverIsLargeEnough(c) && /cover|capa|front|jacket/i.test(path.basename(c.href))
+  );
+  if (named) return named.jpeg;
+
+  const bookLike = candidates.filter((c) => {
+    if (!coverIsLargeEnough(c) || c.width <= 0 || c.height <= 0) return false;
+    const ratio = c.width / c.height;
+    // Jackets are portrait or near-square; drop wide banners / chapter strips.
+    return ratio <= 1.35 && ratio >= 0.4;
+  });
+  const pool = bookLike.length > 0 ? bookLike : candidates.filter(coverIsLargeEnough);
+  const ranked = (pool.length > 0 ? pool : candidates).slice().sort((a, b) => {
+    const areaA = a.width * a.height;
+    const areaB = b.width * b.height;
+    if (areaB !== areaA) return areaB - areaA;
+    const portraitA = a.height >= a.width ? 1 : 0;
+    const portraitB = b.height >= b.width ? 1 : 0;
+    return portraitB - portraitA;
+  });
+
+  return ranked[0]?.jpeg ?? candidates[0].jpeg;
 }
 
 async function probeImageSize(
@@ -285,7 +383,6 @@ export async function extractCoverFromEpub(epubBytes: Buffer): Promise<CoverResu
     throw new Error("Capa não encontrada neste EPUB.");
   }
   const dims = (await probeImageSize(coverJpegPath)) || { width: 0, height: 0 };
-  // Prefer cover; artworks[0] already used as fallback inside extractEpubImages
   void artworks;
   return {
     jpegPath: coverJpegPath,
