@@ -162,7 +162,7 @@ When the user requests a durable behavior change, record it here or in the relev
 - Chunk PCM cache under Application Support is kept after encode unless the user asks to delete it
 - Do not commit secrets (`.env`, credentials)
 - Per-book `narrationLanguage` (BCP-47 or `auto`): default is the OS locale; persist with document state; send to Qwen (`lang_code` names) and Kokoro (MLX letter / ONNX `en-us` style) via `/tts` `language`
-- A line or paragraph that contains **only digits** (any length) is a page number: replace it with a blank line (`\n\n` in the joined text) so it is not narrated
+- A line/paragraph of only digits and spaces (`42`, `1 0`, `1 3`), with optional wrappers `()` `[]`, is a printed page number: drop it (PDF: first/last line of the page) and insert `\n\n\n` (`PAGE_NUMBER_GAP`). Do not collapse that gap in sanitize, Qwen `\n{4,}` capping, or the OCR-repair model. Letters keep the line.
 
 ## Child DOX Index
 

@@ -49,9 +49,11 @@ import {
 } from "./mediaConvert";
 import {
   isStandalonePageNumberLine,
+  PAGE_NUMBER_GAP,
   repairExtractedTextWithModel,
   repairExtractionHeuristics,
   replaceStandaloneNumericLines,
+  stripPageEdgePagination,
   type TextRepairPython,
 } from "./textRepair";
 
@@ -668,7 +670,7 @@ function replaceBreakTagsWithNewlines(text: string): string {
   return text
     .replace(/<break\s+time="[\d.]+s"\s*\/?\s*>/gi, QWEN_BREAK_GAP)
     .replace(/[ ]{2,}/g, " ")
-    .replace(/\n{4,}/g, QWEN_BREAK_GAP);
+    .replace(/\n{4,}/g, PAGE_NUMBER_GAP);
 }
 
 function textForEngine(
@@ -805,8 +807,13 @@ function sanitizeExtractedText(
   };
 
   for (const line of lines) {
-    if (!line || isStandalonePageNumberLine(line)) {
+    if (!line) {
       emptyRun += 1;
+      continue;
+    }
+
+    if (isStandalonePageNumberLine(line)) {
+      emptyRun += 2;
       continue;
     }
 
@@ -1254,11 +1261,29 @@ async function extractTextFromPdfLocal(
     const page = await doc.getPage(pageNum);
     const content = await page.getTextContent();
     const pageText = textContentToPlainText(content);
-    if (pageText) pageTexts.push(pageText);
+
+    if (!pageText) {
+      continue;
+    }
+
+    const { text: withoutPagination, strippedLeading } =
+      stripPageEdgePagination(pageText);
+
+    if (!withoutPagination) {
+      continue;
+    }
+
+    if (pageTexts.length === 0) {
+      pageTexts.push(withoutPagination);
+      continue;
+    }
+
+    const glue = strippedLeading ? PAGE_NUMBER_GAP : "\n\n";
+    pageTexts.push(`${glue}${withoutPagination}`);
   }
 
   return {
-    text: pageTexts.join("\n\n").trim(),
+    text: pageTexts.join("").trim(),
     actualStart,
     actualEnd,
     totalPages,

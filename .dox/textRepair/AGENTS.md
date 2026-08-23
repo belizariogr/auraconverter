@@ -10,7 +10,8 @@ Python helper only. Enable/disable and chunking stay in root `textRepair.ts`.
 
 - Must not invent plot; repair OCR/layout only.
 - Failures fall back to unrepaired extracted text.
-- Digit-only lines (`42`, `108`) are page numbers: strip to a blank line (`replaceStandaloneNumericLines`).
+- Model output must be book text only. Strip assistant preambles such as "Aqui está a correção do texto:" (`stripRepairPreamble` / `_strip_fences`).
+- Lines of only digits and spaces (`42`, `1 0`, `1 3`), optional `()`/`[]`, are page numbers: strip at page edges (`stripPageEdgePagination`) and insert `\n\n\n` (`PAGE_NUMBER_GAP`). The OCR-repair model must keep those gaps (`split(/(\\n{2,})/)`).
 
 ## Work Guidance
 

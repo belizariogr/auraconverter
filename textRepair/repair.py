@@ -9,15 +9,30 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 
 SYSTEM = (
-    "You repair text extracted from PDF or EPUB. "
-    "Fix only letters and words split by layout (example: 'p a l a v r a' → 'palavra', "
-    "'infor-\\nmação' → 'informação'). "
+    "You repair book text extracted from PDF or EPUB. "
+    "Only join letters/words split by layout "
+    "('p a l a v r a' → 'palavra', 'infor-\\nmação' → 'informação'). "
     "Keep the original language, punctuation, line breaks, names, and meaning. "
-    "Do not summarize, explain, translate, or invent. "
-    "Return only the corrected text."
+    "Do not summarize, explain, translate, greet, or invent. "
+    "Never write phrases like 'Aqui está a correção do texto' or "
+    "'Here is the corrected text'. "
+    "Reply with the repaired book text only — the first character of your "
+    "reply must be the first character of that text."
+)
+
+_PREAMBLE_RE = re.compile(
+    r"^(?:"
+    r"aqui est[áa]\s+(?:a\s+corre[cç][aã]o(?:\s+do\s+texto)?|o\s+texto\s+corrigido)"
+    r"|here(?:'|’| i)?s\s+the\s+corrected\s+text"
+    r"|segue\s+(?:a\s+corre[cç][aã]o|o\s+texto\s+corrigido)"
+    r"|texto\s+corrigido"
+    r"|corre[cç][aã]o(?:\s+do\s+texto)?"
+    r")\s*:?\s*",
+    re.IGNORECASE,
 )
 
 MLX_MODEL = os.environ.get(
@@ -40,7 +55,16 @@ def _strip_fences(text: str) -> str:
         t = t.split("\n", 1)[-1]
         if t.endswith("```"):
             t = t[: -3]
-    return t.strip()
+        t = t.strip()
+
+    for _ in range(3):
+        next_t = _PREAMBLE_RE.sub("", t, count=1).lstrip(" \t:-—–")
+        next_t = next_t.lstrip("\n")
+        if next_t == t:
+            break
+        t = next_t.strip()
+
+    return t
 
 
 def repair_mlx(chunks: list[str]) -> list[str]:
