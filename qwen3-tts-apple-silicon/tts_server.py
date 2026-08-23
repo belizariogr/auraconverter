@@ -405,7 +405,8 @@ def synthesize(
     them as ref_audio/ref_text so Base ICL (or x-vector) locks tone/energy.
     """
     assert model is not None
-    text = " ".join(text.split())
+    # Keep newlines as pause cues (Node sends `\n\n\n` instead of `<break>` for Qwen).
+    text = "\n".join(" ".join(line.split()) for line in text.split("\n")).strip(" \t")
 
     if skip_icl:
         # Bootstrap preview sample for this speaker id — do not clone from an old anchor.

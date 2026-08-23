@@ -158,6 +158,7 @@ When the user requests a durable behavior change, record it here or in the relev
 - M4B must embed **one** cover: the OPF `cover-image` / largest cover-like JPEG — never every EPUB illustration (Books/QuickTime treat extra JPEGs as video)
 - Encode AAC/MP3 at native TTS rate when possible; do not upsample 24 kHz → 48 kHz with a harsh `aresample` cutoff
 - Apple M5: mlx-audio `mx.clear_cache()` must not run mid-`generate()`. Pin mlx ≥ 0.32.1 (0.30.3 drops mid-utterance Qwen audio). Do **not** force `MLX_ENABLE_TF32=0`.
+- Qwen TTS: never insert `<break>` tags in extracted or editable text — use `\n\n\n` instead. Kokoro still uses `<break>` as silent PCM.
 - Chunk PCM cache under Application Support is kept after encode unless the user asks to delete it
 - Do not commit secrets (`.env`, credentials)
 

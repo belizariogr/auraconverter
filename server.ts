@@ -641,11 +641,46 @@ function stripHtml(html: string): string {
 }
 
 const BREAK_LINE_RE = /^<break\s+time="([\d.]+)s"\s*\/?\s*>$/i;
+const QWEN_BREAK_GAP = "\n\n\n";
 
 function formatBreak(seconds: number): string {
   const clamped = Math.min(10, Math.max(0.25, seconds));
   const label = Number.isInteger(clamped) ? String(clamped) : clamped.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
   return `<break time="${label}s" />`;
+}
+
+/** Qwen has no SSML; `<break>` becomes three newlines. */
+function replaceBreakTagsWithNewlines(text: string): string {
+  return text
+    .replace(/<break\s+time="[\d.]+s"\s*\/?\s*>/gi, QWEN_BREAK_GAP)
+    .replace(/[ ]{2,}/g, " ")
+    .replace(/\n{4,}/g, QWEN_BREAK_GAP);
+}
+
+function textForEngine(
+  text: string,
+  engine: TtsEngineId = activeTtsEngine()
+): string {
+  if (engine !== "qwen3") {
+    return text;
+  }
+
+  return replaceBreakTagsWithNewlines(text);
+}
+
+function pushQwenBreakGap(collapsed: string[]): void {
+  if (collapsed.length === 0) {
+    return;
+  }
+
+  const last = collapsed[collapsed.length - 1];
+  const prev = collapsed[collapsed.length - 2];
+
+  if (last === "" && prev === "") {
+    return;
+  }
+
+  collapsed.push("", "");
 }
 
 /** Each empty line → 0.25s. Break markers are only emitted when this exceeds 1s. */
@@ -691,8 +726,15 @@ function pushOrMergePause(collapsed: string[], mark: string): void {
 }
 
 /** Remove control chars, markup leftovers, and OCR/LLM junk before TTS and display. */
-function sanitizeExtractedText(raw: string): string {
-  if (!raw) return "";
+function sanitizeExtractedText(
+  raw: string,
+  engine: TtsEngineId = activeTtsEngine()
+): string {
+  if (!raw) {
+    return "";
+  }
+
+  const skipBreakTags = engine === "qwen3";
 
   let text = decodeHtmlEntities(raw)
     // Strip Markdown code fences and heading markers often added by LLMs
@@ -724,15 +766,25 @@ function sanitizeExtractedText(raw: string): string {
   let emptyRun = 0;
 
   const flushEmptyRun = () => {
-    if (emptyRun < 1) return;
+    if (emptyRun < 1) {
+      return;
+    }
+
     const count = emptyRun;
     const seconds = pauseSecondsForEmptyLines(count);
     emptyRun = 0;
     // Only inject silence when the gap is longer than 1s; otherwise keep plain \n.
+    // Qwen: never emit `<break>` — insert `\n\n\n` instead.
     if (seconds > 1) {
-      pushOrMergePause(collapsed, formatBreak(seconds));
+      if (skipBreakTags) {
+        pushQwenBreakGap(collapsed);
+      } else {
+        pushOrMergePause(collapsed, formatBreak(seconds));
+      }
+
       return;
     }
+
     for (let i = 0; i < count; i++) {
       collapsed.push("");
     }
@@ -743,11 +795,19 @@ function sanitizeExtractedText(raw: string): string {
       emptyRun += 1;
       continue;
     }
+
     flushEmptyRun();
+
     if (isPauseLine(line)) {
-      pushOrMergePause(collapsed, formatBreak(pauseSecondsFromMarker(line)));
+      if (skipBreakTags) {
+        pushQwenBreakGap(collapsed);
+      } else {
+        pushOrMergePause(collapsed, formatBreak(pauseSecondsFromMarker(line)));
+      }
+
       continue;
     }
+
     collapsed.push(line);
   }
   // Trailing blank runs are dropped (no flush)
@@ -756,7 +816,13 @@ function sanitizeExtractedText(raw: string): string {
     collapsed.pop();
   }
 
-  return repairExtractionHeuristics(collapsed.join("\n").trim());
+  const cleaned = repairExtractionHeuristics(collapsed.join("\n").trim());
+
+  if (skipBreakTags) {
+    return replaceBreakTagsWithNewlines(cleaned);
+  }
+
+  return cleaned;
 }
 
 // Helper: Extract Text from EPUB Chapters using local epub2 library
@@ -1191,15 +1257,17 @@ async function extractDocumentText(options: {
   end: number;
 }): Promise<{ extractedText: string; pagesNarrated: string; actualStart: number; actualEnd: number }> {
   const { fileData, fileType, start, end } = options;
+  const engine = activeTtsEngine();
 
   if (fileType === "pdf") {
     const extracted = await extractTextFromPdfLocal(fileData, start, end);
-    let extractedText = sanitizeExtractedText(extracted.text);
+    let extractedText = sanitizeExtractedText(extracted.text, engine);
     extractedText = await repairExtractedTextWithModel(extractedText, {
       auraRoot: AURA_ROOT,
       dataDir: AURA_DATA_DIR,
       python: resolveTextRepairPython(),
     });
+    extractedText = textForEngine(extractedText, engine);
 
     if (!extractedText) {
       throw new Error(
@@ -1229,12 +1297,13 @@ async function extractDocumentText(options: {
   try {
     await fs.promises.writeFile(tempPath, Buffer.from(fileData, "base64"));
     let extractedText = await extractTextFromEpub(tempPath, start, end);
-    extractedText = sanitizeExtractedText(extractedText);
+    extractedText = sanitizeExtractedText(extractedText, engine);
     extractedText = await repairExtractedTextWithModel(extractedText, {
       auraRoot: AURA_ROOT,
       dataDir: AURA_DATA_DIR,
       python: resolveTextRepairPython(),
     });
+    extractedText = textForEngine(extractedText, engine);
     if (!extractedText) {
       throw new Error(
         "O EPUB não possui conteúdo legível nas seções/capítulos selecionados."
@@ -1284,8 +1353,11 @@ function shouldAttachToPrevious(text: string, prev: string): boolean {
  * Qwen additionally splits oversized packs so 0.6B does not drop the middle.
  */
 function splitOversizedChunk(text: string, maxChars: number): string[] {
+  const trailingNewlines = text.match(/\n+$/)?.[0] ?? "";
   const trimmed = text.trim();
-  if (trimmed.length <= maxChars) return [trimmed];
+  if (trimmed.length <= maxChars) {
+    return [trimmed + trailingNewlines];
+  }
 
   const sentences = trimmed.match(/[^.!?…]+[.!?…]+(?:\s+|$)|[^.!?…]+$/g) || [trimmed];
   const out: string[] = [];
@@ -1308,19 +1380,64 @@ function splitOversizedChunk(text: string, maxChars: number): string[] {
 
   for (const sentence of sentences) {
     const s = sentence.trim();
-    if (!s) continue;
+    if (!s) {
+      continue;
+    }
+
     const next = current ? `${current} ${s}` : s;
     if (next.length <= maxChars) {
       current = next;
       continue;
     }
-    if (current) out.push(current);
+
+    if (current) {
+      out.push(current);
+    }
+
     current = "";
-    if (s.length <= maxChars) current = s;
-    else pushWords(s);
+    if (s.length <= maxChars) {
+      current = s;
+    } else {
+      pushWords(s);
+    }
   }
-  if (current) out.push(current);
-  return out.length > 0 ? out : [trimmed];
+
+  if (current) {
+    out.push(current);
+  }
+  const parts = out.length > 0 ? out : [trimmed];
+
+  if (trailingNewlines && parts.length > 0) {
+    parts[parts.length - 1] += trailingNewlines;
+  }
+
+  return parts;
+}
+
+function appendLogicalParagraphs(source: string, logical: string[]): void {
+  for (const para of source.split(/\n+/)) {
+    const trimmed = para.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    if (isPauseLine(trimmed)) {
+      logical.push(trimmed);
+      continue;
+    }
+
+    const prev = logical[logical.length - 1];
+    if (
+      prev &&
+      prev !== QWEN_BREAK_GAP &&
+      !isPauseLine(prev) &&
+      shouldAttachToPrevious(trimmed, prev)
+    ) {
+      logical[logical.length - 1] = `${prev}\n${trimmed}`;
+    } else {
+      logical.push(trimmed);
+    }
+  }
 }
 
 function splitTextIntoChunks(
@@ -1329,40 +1446,54 @@ function splitTextIntoChunks(
 ): string[] {
   const logical: string[] = [];
 
-  for (const para of text.split(/\n+/)) {
-    const trimmed = para.trim();
-    if (!trimmed) continue;
-
-    if (isPauseLine(trimmed)) {
-      logical.push(trimmed);
-      continue;
+  if (engine === "qwen3") {
+    const sections = replaceBreakTagsWithNewlines(text).split(/\n{3,}/);
+    for (let i = 0; i < sections.length; i++) {
+      appendLogicalParagraphs(sections[i], logical);
+      if (
+        i < sections.length - 1 &&
+        logical.length > 0 &&
+        logical[logical.length - 1] !== QWEN_BREAK_GAP
+      ) {
+        logical.push(QWEN_BREAK_GAP);
+      }
     }
-
-    const prev = logical[logical.length - 1];
-    if (prev && !isPauseLine(prev) && shouldAttachToPrevious(trimmed, prev)) {
-      logical[logical.length - 1] = `${prev}\n${trimmed}`;
-    } else {
-      logical.push(trimmed);
-    }
+  } else {
+    appendLogicalParagraphs(text, logical);
   }
 
   const chunks: string[] = [];
   let group: string[] = [];
 
   const flushGroup = () => {
-    if (group.length === 0) return;
+    if (group.length === 0) {
+      return;
+    }
+
     chunks.push(group.join("\n"));
     group = [];
   };
 
   for (const item of logical) {
+    if (item === QWEN_BREAK_GAP) {
+      flushGroup();
+      if (chunks.length > 0) {
+        chunks[chunks.length - 1] += QWEN_BREAK_GAP;
+      }
+
+      continue;
+    }
+
     if (isPauseLine(item)) {
       flushGroup();
       chunks.push(item);
       continue;
     }
+
     group.push(item);
-    if (group.length >= PARAS_PER_CHUNK) flushGroup();
+    if (group.length >= PARAS_PER_CHUNK) {
+      flushGroup();
+    }
   }
   flushGroup();
 
@@ -1378,7 +1509,8 @@ function splitTextIntoChunks(
       !isPauseLine(last) &&
       paragraphWordCount(chunk) < MIN_PARAGRAPH_WORDS
     ) {
-      merged[merged.length - 1] = `${last}\n${chunk}`;
+      const joiner = last.endsWith(QWEN_BREAK_GAP) ? "" : "\n";
+      merged[merged.length - 1] = `${last}${joiner}${chunk}`;
     } else {
       merged.push(chunk);
     }
@@ -1391,7 +1523,8 @@ function splitTextIntoChunks(
     !isPauseLine(merged[1])
   ) {
     const [first, second, ...rest] = merged;
-    packed = [`${first}\n${second}`, ...rest];
+    const joiner = first.endsWith(QWEN_BREAK_GAP) ? "" : "\n";
+    packed = [`${first}${joiner}${second}`, ...rest];
   }
   if (engine === "qwen3") {
     return packed.flatMap((c) =>
@@ -2485,6 +2618,7 @@ app.post("/api/narrate-stream", async (req, res) => {
     const activeData = fileData || pdfData;
     const type = (fileType || "pdf") as "pdf" | "epub";
     const voice = voiceName || "Vivian";
+    const engine = activeTtsEngine();
     const outputFormat: "mp3" | "m4b" =
       reqOutputFormat === "m4b" ? "m4b" : "mp3";
     const includeCover = reqIncludeCover !== false;
@@ -2525,7 +2659,10 @@ app.post("/api/narrate-stream", async (req, res) => {
         step: "pre_tts",
         message: "Preparando texto editado para narração...",
       });
-      extractedText = sanitizeExtractedText(providedText);
+      extractedText = textForEngine(
+        sanitizeExtractedText(providedText, engine),
+        engine
+      );
       if (!extractedText) {
         sendEvent({ type: "error", error: "O texto para narração está vazio." });
         return res.end();
@@ -2582,7 +2719,6 @@ app.post("/api/narrate-stream", async (req, res) => {
       });
     }
 
-    const engine = activeTtsEngine();
     const textChunks = splitTextIntoChunks(extractedText, engine);
     const totalChunks = textChunks.length;
 

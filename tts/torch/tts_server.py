@@ -407,7 +407,8 @@ def synthesize(
     skip_icl: bool = False,
 ) -> tuple[np.ndarray, int, bool]:
     """Returns (audio, sample_rate, used_icl)."""
-    text = " ".join(text.split())
+    # Keep newlines as pause cues (Node sends `\n\n\n` instead of `<break>` for Qwen).
+    text = "\n".join(" ".join(line.split()) for line in text.split("\n")).strip(" \t")
     language = resolve_language(language)
 
     if skip_icl:

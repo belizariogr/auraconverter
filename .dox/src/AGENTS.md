@@ -14,6 +14,7 @@ React UI (`vite`) for Aura Converter: document queue, voice/engine setup, narrat
 - Talk to the local Express server only (same origin in Electron).
 - User-visible strings in pt-BR.
 - Output format `mp3` | `m4b`; cover export is opt-in per document (`exportCover`).
+- With Qwen, extracted/editable text must not contain `<break>` tags (use `\n\n\n` in their place).
 
 ## Work Guidance
 

@@ -214,6 +214,19 @@ function persistVoice(engine: string, voiceId: string) {
   }
 }
 
+function stripBreakTagsForQwen(
+  text: string,
+  engine: "qwen3" | "kokoro"
+): string {
+  if (engine !== "qwen3" || !text) {
+    return text;
+  }
+
+  return text
+    .replace(/<break\s+time="[\d.]+s"\s*\/?\s*>/gi, "\n\n\n")
+    .replace(/\n{4,}/g, "\n\n\n");
+}
+
 function openDocsDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DOCS_DB_NAME, DOCS_DB_VERSION);
@@ -706,6 +719,25 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
 
   const updateDoc = (id: string, patch: Partial<DocItem>) => {
     setDocuments((docs) => docs.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+  };
+
+  const stripQwenBreaksInQueue = () => {
+    if (ttsEngine !== "qwen3") {
+      return;
+    }
+
+    setDocuments((docs) =>
+      docs.map((d) => {
+        const extractedText = stripBreakTagsForQwen(d.extractedText, "qwen3");
+        const editableText = stripBreakTagsForQwen(d.editableText, "qwen3");
+
+        if (extractedText === d.extractedText && editableText === d.editableText) {
+          return d;
+        }
+
+        return { ...d, extractedText, editableText };
+      })
+    );
   };
 
   // Page / cover previews for active document (refresh only the slots that changed)
@@ -1320,9 +1352,13 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
           throw new Error(`${doc.file.name}: ${payload.error || "Falha ao extrair o texto."}`);
         }
 
+        const extractedText = stripBreakTagsForQwen(
+          String(payload.extractedText ?? ""),
+          ttsEngine
+        );
         updateDoc(doc.id, {
-          extractedText: payload.extractedText,
-          editableText: payload.extractedText,
+          extractedText,
+          editableText: extractedText,
           pagesNarrated: payload.pagesNarrated || "",
         });
       }
@@ -1342,33 +1378,46 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
 
   // Step 1: open review from cache when available; otherwise extract first
   const handleExtractForReview = async () => {
-    if (documents.length === 0 || !allDocsReady) return;
+    if (documents.length === 0 || !allDocsReady) {
+      return;
+    }
 
     // Text already in session cache — skip re-extraction and open review
     if (allDocsHaveExtractedText) {
       setError(null);
       setReviewDocId(documents[0]?.id ?? null);
+      stripQwenBreaksInQueue();
       setShowTextReview(true);
       return;
     }
 
     const missing = documents.filter((d) => !d.editableText.trim());
     const ok = await extractDocuments(missing.length > 0 ? missing : documents);
-    if (!ok) return;
+
+    if (!ok) {
+      return;
+    }
 
     setReviewDocId(documents[0]?.id ?? null);
+    stripQwenBreaksInQueue();
     setShowTextReview(true);
   };
 
   // Force re-extract the document currently open in review
   const handleReExtract = async () => {
     const doc = reviewDoc ?? documents[0];
-    if (!doc || !allDocsReady) return;
+    if (!doc || !allDocsReady) {
+      return;
+    }
 
     const ok = await extractDocuments([doc]);
-    if (!ok) return;
+
+    if (!ok) {
+      return;
+    }
 
     setReviewDocId(doc.id);
+    stripQwenBreaksInQueue();
     setShowTextReview(true);
   };
 
@@ -1448,7 +1497,7 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
     | { status: "cancelled"; completed: number; total: number };
 
   const narrateDocument = async (doc: DocItem): Promise<NarrateResult> => {
-    const text = doc.editableText.trim();
+    const text = stripBreakTagsForQwen(doc.editableText.trim(), ttsEngine);
     if (!text) {
       throw new Error(`${doc.file.name}: edite ou confirme um texto antes de narrar.`);
     }
@@ -1610,8 +1659,12 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
               typeof payload.extractedText === "string" &&
               payload.extractedText.length > 0
             ) {
-              setProcessingPreviewText(payload.extractedText);
-              updateDoc(doc.id, { extractedText: payload.extractedText });
+              const extractedText = stripBreakTagsForQwen(
+                payload.extractedText,
+                ttsEngine
+              );
+              setProcessingPreviewText(extractedText);
+              updateDoc(doc.id, { extractedText });
             }
           } else if (payload.type === "cancelled") {
             const completed = Number(payload.completed) || 0;
@@ -1673,8 +1726,8 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
             if (url) URL.revokeObjectURL(url);
             updateDoc(doc.id, {
               audioBase64: null,
-              extractedText: text,
-              editableText: text,
+              extractedText: stripBreakTagsForQwen(text, ttsEngine),
+              editableText: stripBreakTagsForQwen(text, ttsEngine),
               pagesNarrated,
               audioUrl: null,
               audioFormat: fmt,
@@ -1771,6 +1824,7 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
         setSavedFilesCount(savedCount);
         if (lastName) setLastSavedFileName(lastName);
       } else {
+        stripQwenBreaksInQueue();
         setShowTextReview(true);
       }
     } finally {
