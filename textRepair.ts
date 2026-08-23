@@ -24,14 +24,41 @@ export function joinHyphenatedLineBreaks(text: string): string {
   return text.replace(/(\p{L})-\s*\n\s*(\p{L})/gu, "$1$2");
 }
 
+/** A line/paragraph that is only digits (any length) is a page number, not copy. */
+export function isStandalonePageNumberLine(line: string): boolean {
+  return /^\d+$/.test(line.trim());
+}
+
+/** Swap digit-only lines for a blank line so join yields `\n\n` (not spoken). */
+export function replaceStandaloneNumericLines(text: string): string {
+  if (!text) {
+    return "";
+  }
+
+  return text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => (isStandalonePageNumberLine(line) ? "" : line))
+    .join("\n");
+}
+
 export function repairExtractionHeuristics(text: string): string {
-  if (!text) return "";
-  return collapseSpacedLetters(joinHyphenatedLineBreaks(text)).replace(/[ ]{2,}/g, " ");
+  if (!text) {
+    return "";
+  }
+
+  return replaceStandaloneNumericLines(
+    collapseSpacedLetters(joinHyphenatedLineBreaks(text)).replace(/[ ]{2,}/g, " ")
+  );
 }
 
 export function looksLikeBrokenExtraction(text: string): boolean {
   const tokens = text.split(/\s+/).filter(Boolean);
-  if (tokens.length < 16) return false;
+
+  if (tokens.length < 16) {
+    return false;
+  }
+
   const singles = tokens.filter((t) => t.length === 1 && /\p{L}/u.test(t)).length;
   return singles / tokens.length >= SINGLE_LETTER_RATIO;
 }
@@ -40,8 +67,10 @@ function splitRepairChunks(text: string, maxChars = 1400): string[] {
   const paras = text.split(/\n+/);
   const chunks: string[] = [];
   let buf = "";
+
   for (const para of paras) {
     const next = buf ? `${buf}\n${para}` : para;
+
     if (next.length > maxChars && buf) {
       chunks.push(buf);
       buf = para;
@@ -49,16 +78,30 @@ function splitRepairChunks(text: string, maxChars = 1400): string[] {
       buf = next;
     }
   }
-  if (buf) chunks.push(buf);
+
+  if (buf) {
+    chunks.push(buf);
+  }
+
   return chunks;
 }
 
 function acceptableModelOutput(original: string, repaired: string): boolean {
   const a = original.trim();
   const b = repaired.trim();
-  if (!b) return false;
-  if (b.length < a.length * 0.45) return false;
-  if (b.length > a.length * 1.6) return false;
+
+  if (!b) {
+    return false;
+  }
+
+  if (b.length < a.length * 0.45) {
+    return false;
+  }
+
+  if (b.length > a.length * 1.6) {
+    return false;
+  }
+
   return true;
 }
 
@@ -78,9 +121,12 @@ export async function repairExtractedTextWithModel(
     python: TextRepairPython | null;
   }
 ): Promise<string> {
-  if (!text || !looksLikeBrokenExtraction(text)) return text;
+  if (!text || !looksLikeBrokenExtraction(text)) {
+    return text;
+  }
 
   const script = findRepairScript(options.auraRoot);
+
   if (!script || !options.python) {
     console.warn("[TextRepair] Broken glyphs remain, but no small model runtime is available.");
     return text;
@@ -88,7 +134,10 @@ export async function repairExtractedTextWithModel(
 
   const chunks = splitRepairChunks(text);
   const toFix = chunks.map((c, i) => (looksLikeBrokenExtraction(c) ? i : -1)).filter((i) => i >= 0);
-  if (toFix.length === 0) return text;
+
+  if (toFix.length === 0) {
+    return text;
+  }
 
   console.log(
     `[TextRepair] Running Qwen2.5-0.5B on ${toFix.length}/${chunks.length} chunk(s) with spaced letters.`
@@ -101,7 +150,9 @@ export async function repairExtractedTextWithModel(
     const raw = await runRepairPython(options.python, script, payload, cacheDir);
     const parsed = JSON.parse(raw) as { chunks?: string[] };
     const fixed = parsed.chunks;
-    if (!Array.isArray(fixed) || fixed.length !== toFix.length) return text;
+    if (!Array.isArray(fixed) || fixed.length !== toFix.length) {
+      return text;
+    }
 
     const out = chunks.slice();
     for (let n = 0; n < toFix.length; n++) {
@@ -110,6 +161,7 @@ export async function repairExtractedTextWithModel(
       if (acceptableModelOutput(chunks[idx], candidate)) {
         out[idx] = candidate;
       }
+
     }
     return out.join("\n");
   } catch (err: any) {
@@ -131,8 +183,13 @@ function runRepairPython(
       HF_HOME: cacheDir,
       PYTHONNOUSERSITE: "1",
     };
-    if (python.home) env.PYTHONHOME = python.home;
-    if (python.pythonPath) env.PYTHONPATH = python.pythonPath;
+    if (python.home) {
+      env.PYTHONHOME = python.home;
+    }
+
+    if (python.pythonPath) {
+      env.PYTHONPATH = python.pythonPath;
+    }
 
     const child = spawn(python.bin, [script], {
       env,
@@ -162,7 +219,9 @@ function runRepairPython(
         reject(new Error(stderr.trim() || `repair.py exited ${code}`));
         return;
       }
+
       const line = stdout.trim().split("\n").filter(Boolean).pop() || "";
+
       if (!line) {
         reject(new Error(stderr.trim() || "empty repair.py output"));
         return;

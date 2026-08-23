@@ -38,6 +38,52 @@ ONNX_NAME = os.environ.get("KOKORO_ONNX_NAME", "kokoro-v1.0.onnx")
 VOICES_NAME = os.environ.get("KOKORO_VOICES_NAME", "voices-v1.0.bin")
 DEFAULT_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
 DEFAULT_LANGUAGE = os.environ.get("KOKORO_LANGUAGE", "en-us")
+
+KOKORO_ONNX_LANG_MAP = {
+    "auto": "en-us",
+    "a": "en-us",
+    "en": "en-us",
+    "en-us": "en-us",
+    "english": "en-us",
+    "b": "en-gb",
+    "en-gb": "en-gb",
+    "p": "pt-br",
+    "pt": "pt-br",
+    "pt-br": "pt-br",
+    "portuguese": "pt-br",
+    "e": "es",
+    "es": "es",
+    "es-es": "es",
+    "spanish": "es",
+    "f": "fr-fr",
+    "fr": "fr-fr",
+    "fr-fr": "fr-fr",
+    "french": "fr-fr",
+    "i": "it",
+    "it": "it",
+    "it-it": "it",
+    "italian": "it",
+    "j": "ja",
+    "ja": "ja",
+    "ja-jp": "ja",
+    "japanese": "ja",
+    "z": "zh",
+    "zh": "zh",
+    "zh-cn": "zh",
+    "chinese": "zh",
+    "h": "hi",
+    "hi": "hi",
+    "hi-in": "hi",
+    "hindi": "hi",
+}
+
+
+def resolve_language(language: Optional[str]) -> str:
+    raw = (language or DEFAULT_LANGUAGE).strip() or DEFAULT_LANGUAGE
+    key = raw.lower().replace("_", "-")
+    return KOKORO_ONNX_LANG_MAP.get(key, DEFAULT_LANGUAGE)
+
+
 DEFAULT_SPEED = float(os.environ.get("KOKORO_SPEED", "1.0"))
 
 # Prefer GPU EPs first; CPU always last as fallback.
@@ -333,9 +379,12 @@ def clear_cancel(job_id: Optional[str]) -> None:
         _cancel_jobs.discard(job_id)
 
 
-def synthesize(text: str, voice: str, speed: float) -> tuple[np.ndarray, int]:
+def synthesize(
+    text: str, voice: str, speed: float, language: Optional[str] = None
+) -> tuple[np.ndarray, int]:
     model = ensure_model()
-    samples, sample_rate = model.create(text, voice=voice, speed=speed, lang=DEFAULT_LANGUAGE)
+    lang = resolve_language(language)
+    samples, sample_rate = model.create(text, voice=voice, speed=speed, lang=lang)
     return np.asarray(samples, dtype=np.float32), int(sample_rate or DEFAULT_SAMPLE_RATE)
 
 
@@ -501,10 +550,14 @@ def tts(req: TtsRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="text is required")
 
     voice = resolve_voice(req.voice)
+    language = resolve_language(req.language)
     job_id = req.jobId
     clear_cancel(job_id)
 
-    print(f"[kokoro] /tts voice={voice!r} jobId={job_id or '-'} chars={len(text)}")
+    print(
+        f"[kokoro] /tts voice={voice!r} lang={language!r} "
+        f"jobId={job_id or '-'} chars={len(text)}"
+    )
 
     if job_cancelled(job_id):
         clear_cancel(job_id)
@@ -518,7 +571,7 @@ def tts(req: TtsRequest) -> dict[str, Any]:
         }
 
     try:
-        audio, sample_rate = synthesize(text, voice, DEFAULT_SPEED)
+        audio, sample_rate = synthesize(text, voice, DEFAULT_SPEED, language)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

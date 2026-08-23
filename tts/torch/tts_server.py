@@ -108,24 +108,36 @@ VOICE_ALIASES = {
 LANGUAGE_MAP = {
     "auto": "Auto",
     "en": "English",
+    "en-us": "English",
+    "en-gb": "English",
     "english": "English",
     "zh": "Chinese",
+    "zh-cn": "Chinese",
+    "zh-hans": "Chinese",
     "chinese": "Chinese",
     "ja": "Japanese",
+    "ja-jp": "Japanese",
     "japanese": "Japanese",
     "ko": "Korean",
+    "ko-kr": "Korean",
     "korean": "Korean",
     "de": "German",
+    "de-de": "German",
     "german": "German",
     "fr": "French",
+    "fr-fr": "French",
     "french": "French",
     "ru": "Russian",
+    "ru-ru": "Russian",
     "russian": "Russian",
     "pt": "Portuguese",
+    "pt-br": "Portuguese",
     "portuguese": "Portuguese",
     "es": "Spanish",
+    "es-es": "Spanish",
     "spanish": "Spanish",
     "it": "Italian",
+    "it-it": "Italian",
     "italian": "Italian",
 }
 
@@ -159,7 +171,7 @@ def speaker_api_name(voice: str) -> str:
 
 def resolve_language(language: Optional[str]) -> str:
     raw = (language or DEFAULT_LANGUAGE).strip() or DEFAULT_LANGUAGE
-    mapped = LANGUAGE_MAP.get(raw.lower())
+    mapped = LANGUAGE_MAP.get(raw.lower().replace("_", "-"))
     if mapped:
         return mapped
     # Already a display name (English, Auto, …)
@@ -564,7 +576,7 @@ def tts(req: TtsRequest):
         raise HTTPException(status_code=400, detail="text is required")
 
     voice = resolve_voice(req.voice)
-    language = (req.language or DEFAULT_LANGUAGE).strip() or DEFAULT_LANGUAGE
+    language = resolve_language(req.language)
     instruct = (req.instruct or DEFAULT_INSTRUCT).strip() or DEFAULT_INSTRUCT
     temperature = (
         DEFAULT_TEMPERATURE if req.temperature is None else float(req.temperature)

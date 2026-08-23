@@ -22,6 +22,7 @@ Qwen3-TTS FastAPI server on Apple Silicon (MLX). Used by `server.ts` on darwin.
 
 - Do not call `mx.clear_cache()` between codec tokens (mlx-audio does; we hold it).
 - Keep API fields compatible with Kokoro/Torch servers (`refAudioPath`, `skipIcl`, `jobId`).
+- `/tts` `language` is required for narration: map BCP-47 / aliases to Qwen names (`Portuguese`, `English`, `Auto`, …).
 
 ## Verification
 

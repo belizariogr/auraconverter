@@ -4,7 +4,7 @@ React UI (`vite`) for Aura Converter: document queue, voice/engine setup, narrat
 
 ## Ownership
 
-- `src/App.tsx` — narrate mode, document state, SSE to `/api/*`
+- `src/App.tsx` — narrate mode, document state (incl. `narrationLanguage`), SSE to `/api/*`
 - `src/ModePanels.tsx` — extract-cover / convert panels
 - `src/ModelSetup.tsx` — engine, voice, model download
 - `src/main.tsx`, `src/index.css` — bootstrap / theme
@@ -14,6 +14,7 @@ React UI (`vite`) for Aura Converter: document queue, voice/engine setup, narrat
 - Talk to the local Express server only (same origin in Electron).
 - User-visible strings in pt-BR.
 - Output format `mp3` | `m4b`; cover export is opt-in per document (`exportCover`).
+- Persist `narrationLanguage` (BCP-47 or `auto`) per document; default is the OS locale (`navigator.language`).
 - With Qwen, extracted/editable text must not contain `<break>` tags (use `\n\n\n` in their place).
 
 ## Work Guidance

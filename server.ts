@@ -32,6 +32,7 @@ import {
   writeKokoroBackend,
   type TtsEngineId,
 } from "./ttsEngine";
+import { languagePayloadForTts } from "./narrationLanguage";
 import {
   convertImageToJpeg,
   coverToBase64Jpeg,
@@ -47,8 +48,10 @@ import {
   pcmToMp3,
 } from "./mediaConvert";
 import {
+  isStandalonePageNumberLine,
   repairExtractedTextWithModel,
   repairExtractionHeuristics,
+  replaceStandaloneNumericLines,
   type TextRepairPython,
 } from "./textRepair";
 
@@ -163,6 +166,17 @@ function rocmSpawnEnv(): NodeJS.ProcessEnv {
 
 function activeTtsEngine(): TtsEngineId {
   return readTtsEngine(AURA_DATA_DIR);
+}
+
+function resolveNarrationLanguagePayload(raw: unknown): string {
+  const requested = typeof raw === "string" ? raw.trim() : "";
+  const languageId = requested || TTS_LANGUAGE;
+
+  return languagePayloadForTts(
+    languageId,
+    activeTtsEngine(),
+    readKokoroBackend(AURA_DATA_DIR)
+  );
 }
 
 function resolveKokoroLaunch(): {
@@ -791,7 +805,7 @@ function sanitizeExtractedText(
   };
 
   for (const line of lines) {
-    if (!line) {
+    if (!line || isStandalonePageNumberLine(line)) {
       emptyRun += 1;
       continue;
     }
@@ -940,6 +954,7 @@ async function synthesizeWithTts(
     refAudioPath?: string;
     refText?: string;
     skipIcl?: boolean;
+    language?: string;
   }
 ): Promise<{ pcm: Buffer; sampleRate: number; cancelled: boolean; icl?: boolean }> {
   if (signal?.aborted) {
@@ -957,7 +972,7 @@ async function synthesizeWithTts(
       jobId,
       instruct: TTS_INSTRUCT,
       temperature: TTS_TEMPERATURE,
-      language: TTS_LANGUAGE,
+      language: opts?.language?.trim() || TTS_LANGUAGE,
       ...(opts?.refAudioPath && opts?.refText
         ? { refAudioPath: opts.refAudioPath, refText: opts.refText }
         : {}),
@@ -1267,6 +1282,7 @@ async function extractDocumentText(options: {
       dataDir: AURA_DATA_DIR,
       python: resolveTextRepairPython(),
     });
+    extractedText = replaceStandaloneNumericLines(extractedText);
     extractedText = textForEngine(extractedText, engine);
 
     if (!extractedText) {
@@ -1303,7 +1319,9 @@ async function extractDocumentText(options: {
       dataDir: AURA_DATA_DIR,
       python: resolveTextRepairPython(),
     });
+    extractedText = replaceStandaloneNumericLines(extractedText);
     extractedText = textForEngine(extractedText, engine);
+
     if (!extractedText) {
       throw new Error(
         "O EPUB não possui conteúdo legível nas seções/capítulos selecionados."
@@ -1592,9 +1610,14 @@ function chunkMetaPath(docId: string): string {
   return path.join(chunkCacheDirFor(docId), "meta.json");
 }
 
-function narrationFingerprint(text: string, voice: string, engine: string): string {
+function narrationFingerprint(
+  text: string,
+  voice: string,
+  engine: string,
+  language: string
+): string {
   return createHash("sha256")
-    .update(`${engine}\n${voice}\n${text}`)
+    .update(`${engine}\n${voice}\n${language}\n${text}`)
     .digest("hex")
     .slice(0, 40);
 }
@@ -2606,6 +2629,7 @@ app.post("/api/narrate-stream", async (req, res) => {
       includeCover: reqIncludeCover,
       sourceFileName,
       docId: reqDocId,
+      language: reqLanguage,
     } = req.body;
     taskId = reqTaskId;
     const docId =
@@ -2619,6 +2643,7 @@ app.post("/api/narrate-stream", async (req, res) => {
     const type = (fileType || "pdf") as "pdf" | "epub";
     const voice = voiceName || "Vivian";
     const engine = activeTtsEngine();
+    const ttsLanguage = resolveNarrationLanguagePayload(reqLanguage);
     const outputFormat: "mp3" | "m4b" =
       reqOutputFormat === "m4b" ? "m4b" : "mp3";
     const includeCover = reqIncludeCover !== false;
@@ -2639,7 +2664,7 @@ app.post("/api/narrate-stream", async (req, res) => {
     }
 
     console.log(
-      `[NarrateStream] textProvided=${!!providedText}, Type: ${type}, Start: ${start}, End: ${end}, Voice: ${voice}`
+      `[NarrateStream] textProvided=${!!providedText}, Type: ${type}, Start: ${start}, End: ${end}, Voice: ${voice}, Language: ${ttsLanguage}`
     );
 
     let extractedText = "";
@@ -2766,7 +2791,12 @@ app.post("/api/narrate-stream", async (req, res) => {
     let wasStoppedEarly = false;
     const taskAbort = taskId ? activeTasks.get(taskId)?.abort : undefined;
     const engineLabel = engine === "kokoro" ? "Kokoro" : "Qwen3";
-    const fingerprint = narrationFingerprint(extractedText, voice, engine);
+    const fingerprint = narrationFingerprint(
+      extractedText,
+      voice,
+      engine,
+      ttsLanguage
+    );
 
     let cacheMeta: ChunkCacheMeta | null = null;
     if (docId) {
@@ -2855,8 +2885,9 @@ app.post("/api/narrate-stream", async (req, res) => {
               ? {
                   refAudioPath: voiceAnchor.refAudioPath,
                   refText: voiceAnchor.refText,
+                  language: ttsLanguage,
                 }
-              : { skipIcl: true }
+              : { skipIcl: true, language: ttsLanguage }
           );
           pcm = result.pcm;
           sampleRate = result.sampleRate;
@@ -3131,7 +3162,7 @@ app.post("/api/narrate-stream", async (req, res) => {
 // Original endpoint kept for backwards compatibility / fallback
 app.post("/api/narrate", async (req, res) => {
   try {
-    const { pdfData, startPage, endPage, voiceName } = req.body;
+    const { pdfData, startPage, endPage, voiceName, language: reqLanguage } = req.body;
 
     if (!pdfData) {
       return res.status(400).json({ error: "O arquivo PDF é obrigatório." });
@@ -3139,8 +3170,11 @@ app.post("/api/narrate", async (req, res) => {
 
     const { start, end } = parsePageRange(startPage, endPage);
     const voice = voiceName || "Vivian";
+    const ttsLanguage = resolveNarrationLanguagePayload(reqLanguage);
 
-    console.log(`[Narrate Legacy] Start Page: ${start}, End Page: ${end}, Voice: ${voice}`);
+    console.log(
+      `[Narrate Legacy] Start Page: ${start}, End Page: ${end}, Voice: ${voice}, Language: ${ttsLanguage}`
+    );
 
     const { extractedText, pagesNarrated } = await extractDocumentText({
       fileData: pdfData,
@@ -3186,8 +3220,9 @@ app.post("/api/narrate", async (req, res) => {
             ? {
                 refAudioPath: voiceAnchor.refAudioPath,
                 refText: voiceAnchor.refText,
+                language: ttsLanguage,
               }
-            : { skipIcl: true }
+            : { skipIcl: true, language: ttsLanguage }
         );
         sampleRate = sr;
         if (pcm.length > 0) {

@@ -24,6 +24,7 @@ import {
   Image as ImageIcon,
   ArrowRightLeft,
   Mic2,
+  Languages,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -31,6 +32,13 @@ import {
   Mp3ToM4bPanel,
   M4bToMp3Panel,
 } from "./ModePanels";
+import {
+  NARRATION_LANGUAGES,
+  detectSystemNarrationLanguage,
+  getNarrationLanguage,
+  resolveNarrationLanguageId,
+  type NarrationLanguageId,
+} from "../narrationLanguage.ts";
 
 type AppMode = "narrate" | "extract-cover" | "mp3-to-m4b" | "m4b-to-mp3";
 type OutputFormat = "mp3" | "m4b";
@@ -92,6 +100,8 @@ interface DocItem {
   narrationProgress: { completed: number; total: number } | null;
   /** Hash of the text that produced the cached chunks — invalidate on edit. */
   narrationTextHash: string | null;
+  /** BCP-47 (or `auto`) for TTS; defaults to the OS locale. */
+  narrationLanguage: NarrationLanguageId;
 }
 
 type PagePreviewKey = "start" | "end" | "cover";
@@ -104,14 +114,32 @@ function createDocId() {
 }
 
 /** Stable hash of narration text — used to invalidate chunk cache on edits. */
-function hashNarrationText(text: string): string {
-  const normalized = text.replace(/\r\n/g, "\n").trim();
+function hashNarrationText(text: string, language = ""): string {
+  const body = text.replace(/\r\n/g, "\n").trim();
+  const normalized = language ? `${language}\n${body}` : body;
   let h = 2166136261;
   for (let i = 0; i < normalized.length; i++) {
     h ^= normalized.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
+
   return `${normalized.length.toString(36)}_${(h >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function narrationHashesMatch(
+  stored: string | null | undefined,
+  text: string,
+  language: string
+): boolean {
+  if (!stored) {
+    return false;
+  }
+
+  if (stored === hashNarrationText(text, language)) {
+    return true;
+  }
+
+  return stored === hashNarrationText(text, "");
 }
 
 function isPdfOrEpub(file: File): boolean {
@@ -173,6 +201,7 @@ interface PersistedDoc {
   endChapterPreview: ChapterPreview | null;
   narrationProgress: { completed: number; total: number } | null;
   narrationTextHash: string | null;
+  narrationLanguage?: string;
 }
 
 interface PersistedDocumentsState {
@@ -338,6 +367,7 @@ function serializeDoc(doc: DocItem): PersistedDoc | null {
     endChapterPreview: doc.endChapterPreview,
     narrationProgress: doc.narrationProgress,
     narrationTextHash: doc.narrationTextHash,
+    narrationLanguage: doc.narrationLanguage,
   };
 }
 
@@ -375,6 +405,9 @@ async function restoreDoc(saved: PersistedDoc): Promise<DocItem> {
     endChapterPreview: saved.endChapterPreview ?? null,
     narrationProgress: saved.narrationProgress ?? null,
     narrationTextHash: saved.narrationTextHash ?? null,
+    narrationLanguage: resolveNarrationLanguageId(
+      saved.narrationLanguage || detectSystemNarrationLanguage()
+    ),
   };
 }
 
@@ -518,9 +551,15 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
         for (let i = 0; i < restored.length; i++) {
           if (cancelled) return;
           const doc = restored[i];
-          const textHash = hashNarrationText(doc.editableText || "");
-          const hashMatches =
-            !!doc.narrationTextHash && doc.narrationTextHash === textHash;
+          const textHash = hashNarrationText(
+            doc.editableText || "",
+            doc.narrationLanguage
+          );
+          const hashMatches = narrationHashesMatch(
+            doc.narrationTextHash,
+            doc.editableText || "",
+            doc.narrationLanguage
+          );
 
           if (doc.narrationProgress && !hashMatches) {
             void clearChunkCacheOnServer(doc.id);
@@ -1139,6 +1178,7 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
       endChapterPreview: null,
       narrationProgress: null,
       narrationTextHash: null,
+      narrationLanguage: detectSystemNarrationLanguage(),
     }));
 
     setDocuments((prev) => [...prev, ...newDocs]);
@@ -1211,12 +1251,14 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
   const updateEditableText = (docId: string, value: string) => {
     setDocuments((docs) =>
       docs.map((d) => {
-        if (d.id !== docId) return d;
-        const nextHash = hashNarrationText(value);
+        if (d.id !== docId)
+          return d;
+
         const shouldInvalidate =
           !!d.narrationProgress &&
           !!d.narrationTextHash &&
-          d.narrationTextHash !== nextHash;
+          !narrationHashesMatch(d.narrationTextHash, value, d.narrationLanguage);
+
         if (shouldInvalidate) {
           void clearChunkCacheOnServer(d.id);
           return {
@@ -1226,7 +1268,37 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
             narrationTextHash: null,
           };
         }
+
         return { ...d, editableText: value };
+      })
+    );
+  };
+
+  const setDocNarrationLanguage = (docId: string, language: NarrationLanguageId) => {
+    setDocuments((docs) =>
+      docs.map((d) => {
+        if (d.id !== docId)
+          return d;
+
+        if (d.narrationLanguage === language)
+          return d;
+
+        const shouldInvalidate =
+          !!d.narrationProgress &&
+          !!d.narrationTextHash &&
+          !narrationHashesMatch(d.narrationTextHash, d.editableText, language);
+
+        if (shouldInvalidate) {
+          void clearChunkCacheOnServer(d.id);
+          return {
+            ...d,
+            narrationLanguage: language,
+            narrationProgress: null,
+            narrationTextHash: null,
+          };
+        }
+
+        return { ...d, narrationLanguage: language };
       })
     );
   };
@@ -1502,9 +1574,9 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
       throw new Error(`${doc.file.name}: edite ou confirme um texto antes de narrar.`);
     }
 
-    const textHash = hashNarrationText(text);
-    // If text changed since last cached run, drop old progress (server also clears by fingerprint)
-    if (doc.narrationTextHash && doc.narrationTextHash !== textHash) {
+    const textHash = hashNarrationText(text, doc.narrationLanguage);
+    // If text or language changed since last cached run, drop old progress (server also clears by fingerprint)
+    if (doc.narrationTextHash && !narrationHashesMatch(doc.narrationTextHash, text, doc.narrationLanguage)) {
       void clearChunkCacheOnServer(doc.id);
       updateDoc(doc.id, { narrationProgress: null, narrationTextHash: null });
     } else {
@@ -1555,6 +1627,7 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
           (doc.fileType === "epub" ||
             (doc.fileType === "pdf" && doc.coverPage.trim() !== "")),
         sourceFileName: doc.file.name,
+        language: doc.narrationLanguage,
       }),
     });
 
@@ -2951,6 +3024,36 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
                         Configurando: <span className="text-slate-200 font-medium">{activeDoc.file.name}</span>
                       </p>
                     )}
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                        <Languages className="w-3.5 h-3.5 text-blue-400" />
+                        Idioma do livro
+                      </label>
+                      <select
+                        value={activeDoc.narrationLanguage}
+                        onChange={(e) =>
+                          setDocNarrationLanguage(
+                            activeDoc.id,
+                            resolveNarrationLanguageId(e.target.value)
+                          )
+                        }
+                        className="w-full bg-slate-900/50 border border-white/15 text-white focus:border-blue-500 rounded-xl px-4 py-3 text-sm font-semibold outline-none"
+                        aria-label="Idioma do livro e da narração"
+                      >
+                        {NARRATION_LANGUAGES.map((lang) => (
+                          <option key={lang.id} value={lang.id}>
+                            {lang.flag} {lang.label}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-[11px] text-slate-400 leading-normal">
+                        {ttsEngine === "kokoro" &&
+                        !getNarrationLanguage(activeDoc.narrationLanguage).kokoroNative
+                          ? "O padrão segue o idioma do sistema. Kokoro não tem voz nativa nesta língua — a pronúncia pode ficar em inglês."
+                          : "O padrão segue o idioma do sistema. A narração usa este idioma no Qwen e no Kokoro."}
+                      </p>
+                    </div>
 
                     {activeDoc.docInfoLoading ? (
                       <div className="flex items-center gap-2 text-sm text-slate-400">

@@ -9,6 +9,7 @@ Parent index only. Launch selection lives in root `server.ts` (`resolveKokoroLau
 ## Local Contracts
 
 - Same HTTP surface as Qwen MLX: `/health`, `/tts`, `/tts/cancel`, `/tts/unload`.
+- `/tts` `language` comes from the book locale (see root `narrationLanguage.ts`); do not ignore it.
 - Darwin Kokoro MLX shares `qwen3-tts-apple-silicon/.venv`.
 
 ## Work Guidance

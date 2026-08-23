@@ -148,7 +148,7 @@ Default section order:
 
 ## Purpose (this repo)
 
-Aura Converter / AuraReader: Electron + Express app that extracts PDF/EPUB text, narrates locally (Qwen3-TTS MLX on Mac, or Kokoro), and writes **MP3** or **M4B**. Root TypeScript (`server.ts`, `mediaConvert.ts`, `coverExtract.ts`, TTS launch helpers) is owned here.
+Aura Converter / AuraReader: Electron + Express app that extracts PDF/EPUB text, narrates locally (Qwen3-TTS MLX on Mac, or Kokoro), and writes **MP3** or **M4B**. Root TypeScript (`server.ts`, `mediaConvert.ts`, `coverExtract.ts`, `narrationLanguage.ts`, TTS launch helpers) is owned here.
 
 ## User Preferences
 
@@ -161,6 +161,8 @@ When the user requests a durable behavior change, record it here or in the relev
 - Qwen TTS: never insert `<break>` tags in extracted or editable text — use `\n\n\n` instead. Kokoro still uses `<break>` as silent PCM.
 - Chunk PCM cache under Application Support is kept after encode unless the user asks to delete it
 - Do not commit secrets (`.env`, credentials)
+- Per-book `narrationLanguage` (BCP-47 or `auto`): default is the OS locale; persist with document state; send to Qwen (`lang_code` names) and Kokoro (MLX letter / ONNX `en-us` style) via `/tts` `language`
+- A line or paragraph that contains **only digits** (any length) is a page number: replace it with a blank line (`\n\n` in the joined text) so it is not narrated
 
 ## Child DOX Index
 

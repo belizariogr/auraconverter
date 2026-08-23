@@ -9,6 +9,7 @@ CUDA / ROCm / CPU venvs via `scripts/setup-torch-tts.cjs`.
 ## Local Contracts
 
 - Same JSON `/tts` body as MLX. CustomVoice path; ICL/ref audio unused unless Base is wired the same way as MLX.
+- Resolve `/tts` `language` aliases (BCP-47 and names) via `LANGUAGE_MAP` before `generate_*`.
 - Do **not** flatten `\n` in `synthesize()`; Node uses `\n\n\n` instead of `<break>` for Qwen.
 - Not used on darwin (MLX Qwen wins).
 

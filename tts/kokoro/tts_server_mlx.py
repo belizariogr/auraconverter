@@ -34,6 +34,46 @@ DEFAULT_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
 DEFAULT_SPEED = float(os.environ.get("KOKORO_SPEED", "1.0"))
 # Kokoro MLX lang codes: a=American English, b=British, …
 DEFAULT_LANG = os.environ.get("KOKORO_LANG_CODE", "a")
+
+# Catalog ids from narrationLanguage.ts plus mlx-audio letters.
+KOKORO_MLX_LANG_MAP = {
+    "auto": "a",
+    "en": "a",
+    "en-us": "a",
+    "english": "a",
+    "en-gb": "b",
+    "pt": "p",
+    "pt-br": "p",
+    "portuguese": "p",
+    "es": "e",
+    "es-es": "e",
+    "spanish": "e",
+    "fr": "f",
+    "fr-fr": "f",
+    "french": "f",
+    "it": "i",
+    "it-it": "i",
+    "italian": "i",
+    "ja": "j",
+    "ja-jp": "j",
+    "japanese": "j",
+    "zh": "z",
+    "zh-cn": "z",
+    "chinese": "z",
+    "hi": "h",
+    "hi-in": "h",
+    "hindi": "h",
+}
+
+
+def resolve_lang_code(language: Optional[str]) -> str:
+    raw = (language or DEFAULT_LANG).strip() or DEFAULT_LANG
+    if len(raw) == 1 and raw.lower() in "abefhijpz":
+        return raw.lower()
+    key = raw.lower().replace("_", "-")
+    return KOKORO_MLX_LANG_MAP.get(key, DEFAULT_LANG)
+
+
 HF_REPO = os.environ.get("KOKORO_MLX_REPO", "mlx-community/Kokoro-82M-bf16")
 
 SPEAKERS = {
@@ -234,19 +274,24 @@ def _hold_mlx_cache():
 
 
 def synthesize(
-    text: str, voice: str, speed: float, job_id: Optional[str] = None
+    text: str,
+    voice: str,
+    speed: float,
+    job_id: Optional[str] = None,
+    language: Optional[str] = None,
 ) -> tuple[np.ndarray, int]:
     model = ensure_model()
     chunks: list[np.ndarray] = []
     sample_rate = DEFAULT_SAMPLE_RATE
     voice_arg = resolve_voice_arg(voice)
+    lang_code = resolve_lang_code(language)
     # Do not split on newlines: each split is a new generate window + cache wipe.
     with _hold_mlx_cache():
         for result in model.generate(
             text,
             voice=voice_arg,
             speed=speed,
-            lang_code=DEFAULT_LANG,
+            lang_code=lang_code,
             split_pattern=None,
         ):
             if job_cancelled(job_id):
@@ -352,10 +397,14 @@ def tts(req: TtsRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="text is required")
 
     voice = resolve_voice(req.voice)
+    language = resolve_lang_code(req.language)
     job_id = req.jobId
     clear_cancel(job_id)
 
-    print(f"[kokoro-mlx] /tts voice={voice!r} jobId={job_id or '-'} chars={len(text)}")
+    print(
+        f"[kokoro-mlx] /tts voice={voice!r} lang={language!r} "
+        f"jobId={job_id or '-'} chars={len(text)}"
+    )
 
     if job_cancelled(job_id):
         clear_cancel(job_id)
@@ -369,7 +418,9 @@ def tts(req: TtsRequest) -> dict[str, Any]:
         }
 
     try:
-        audio, sample_rate = synthesize(text, voice, DEFAULT_SPEED, job_id=job_id)
+        audio, sample_rate = synthesize(
+            text, voice, DEFAULT_SPEED, job_id=job_id, language=language
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

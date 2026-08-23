@@ -17,6 +17,7 @@ Kokoro TTS: ONNX Runtime (`tts_server.py`) and MLX (`tts_server_mlx.py`).
 
 - Prefer local `voices/*.safetensors` when present.
 - `KOKORO_DEVICE=cpu` is the diagnostic escape hatch on Metal bugs.
+- Map request `language` to MLX `lang_code` (`p`, `a`, …) or ONNX `lang` (`pt-br`, `en-us`, …).
 
 ## Verification
 
