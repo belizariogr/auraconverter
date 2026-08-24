@@ -39,6 +39,11 @@ import {
   resolveNarrationLanguageId,
   type NarrationLanguageId,
 } from "../narrationLanguage.ts";
+import {
+  NARRATION_SPEED_DEFAULT,
+  clampNarrationSpeed,
+} from "../narrationSpeed.ts";
+import NarrationSpeedSlider from "./NarrationSpeedSlider";
 
 type AppMode = "narrate" | "extract-cover" | "mp3-to-m4b" | "m4b-to-mp3";
 type OutputFormat = "mp3" | "m4b";
@@ -102,6 +107,8 @@ interface DocItem {
   narrationTextHash: string | null;
   /** BCP-47 (or `auto`) for TTS; defaults to the OS locale. */
   narrationLanguage: NarrationLanguageId;
+  /** Playback speed multiplier (encode-time atempo); default 1. */
+  narrationSpeed: number;
 }
 
 type PagePreviewKey = "start" | "end" | "cover";
@@ -171,6 +178,8 @@ const FALLBACK_QWEN_VOICES: Voice[] = [
 
 const VOICE_STORAGE_KEY = "aura-reader-voice";
 const ENGINE_VOICE_STORAGE_KEY = "aura-reader-voice-by-engine";
+const LANGUAGE_STORAGE_KEY = "aura-reader-narration-language";
+const SPEED_STORAGE_KEY = "aura-reader-narration-speed";
 const DOCS_DB_NAME = "aura-reader";
 const DOCS_DB_VERSION = 1;
 const DOCS_STORE = "session";
@@ -202,6 +211,7 @@ interface PersistedDoc {
   narrationProgress: { completed: number; total: number } | null;
   narrationTextHash: string | null;
   narrationLanguage?: string;
+  narrationSpeed?: number;
 }
 
 interface PersistedDocumentsState {
@@ -238,6 +248,53 @@ function persistVoice(engine: string, voiceId: string) {
     >;
     byEngine[engine] = voiceId;
     localStorage.setItem(ENGINE_VOICE_STORAGE_KEY, JSON.stringify(byEngine));
+  } catch {
+    // ignore
+  }
+}
+
+function loadSavedNarrationLanguage(): NarrationLanguageId {
+  try {
+    const saved = localStorage.getItem(LANGUAGE_STORAGE_KEY);
+
+    if (saved) {
+      return resolveNarrationLanguageId(saved);
+    }
+  } catch {
+    // ignore
+  }
+
+  return detectSystemNarrationLanguage();
+}
+
+function persistNarrationLanguage(language: NarrationLanguageId) {
+  try {
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+  } catch {
+    // ignore
+  }
+}
+
+function loadSavedNarrationSpeed(): number {
+  try {
+    const saved = localStorage.getItem(SPEED_STORAGE_KEY);
+
+    if (saved != null && saved !== "") {
+      return clampNarrationSpeed(Number(saved));
+    }
+  } catch {
+    // ignore
+  }
+
+  return NARRATION_SPEED_DEFAULT;
+}
+
+function persistNarrationSpeed(speed: number) {
+  try {
+    localStorage.setItem(
+      SPEED_STORAGE_KEY,
+      String(clampNarrationSpeed(speed))
+    );
   } catch {
     // ignore
   }
@@ -368,6 +425,7 @@ function serializeDoc(doc: DocItem): PersistedDoc | null {
     narrationProgress: doc.narrationProgress,
     narrationTextHash: doc.narrationTextHash,
     narrationLanguage: doc.narrationLanguage,
+    narrationSpeed: doc.narrationSpeed,
   };
 }
 
@@ -406,7 +464,10 @@ async function restoreDoc(saved: PersistedDoc): Promise<DocItem> {
     narrationProgress: saved.narrationProgress ?? null,
     narrationTextHash: saved.narrationTextHash ?? null,
     narrationLanguage: resolveNarrationLanguageId(
-      saved.narrationLanguage || detectSystemNarrationLanguage()
+      saved.narrationLanguage || loadSavedNarrationLanguage()
+    ),
+    narrationSpeed: clampNarrationSpeed(
+      saved.narrationSpeed ?? loadSavedNarrationSpeed()
     ),
   };
 }
@@ -476,6 +537,9 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
   const previewLanguageId =
     activeDoc?.narrationLanguage ?? detectSystemNarrationLanguage();
   const previewLanguage = getNarrationLanguage(previewLanguageId);
+  const previewSpeed = clampNarrationSpeed(
+    activeDoc?.narrationSpeed ?? NARRATION_SPEED_DEFAULT
+  );
   const reviewDoc = documents.find((d) => d.id === reviewDocId) ?? documents[0] ?? null;
   const resultDoc =
     documents.find((d) => d.id === resultDocId) ?? completedDocs[0] ?? null;
@@ -601,7 +665,18 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
         if (cancelled) return;
         setDocuments(withProgress);
         const activeStillExists = withProgress.some((d) => d.id === saved.activeDocId);
-        setActiveDocId(activeStillExists ? saved.activeDocId : withProgress[0]?.id ?? null);
+        const nextActiveId = activeStillExists
+          ? saved.activeDocId
+          : withProgress[0]?.id ?? null;
+        setActiveDocId(nextActiveId);
+        const activeRestored =
+          withProgress.find((d) => d.id === nextActiveId) ?? withProgress[0];
+
+        if (activeRestored) {
+          persistNarrationLanguage(activeRestored.narrationLanguage);
+          persistNarrationSpeed(activeRestored.narrationSpeed);
+        }
+
         if (saved.outputFormat === "mp3" || saved.outputFormat === "m4b") {
           setOutputFormat(saved.outputFormat);
         }
@@ -727,15 +802,6 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
   const previewCacheRef = useRef<Record<string, string>>({});
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const previewRequestIdRef = useRef(0);
-
-  // Persist voice selection
-  useEffect(() => {
-    try {
-      localStorage.setItem(VOICE_STORAGE_KEY, selectedVoice);
-    } catch {
-      // ignore
-    }
-  }, [selectedVoice]);
 
   // Clean up voice preview audio on unmount
   useEffect(() => {
@@ -1184,7 +1250,8 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
       endChapterPreview: null,
       narrationProgress: null,
       narrationTextHash: null,
-      narrationLanguage: detectSystemNarrationLanguage(),
+      narrationLanguage: loadSavedNarrationLanguage(),
+      narrationSpeed: loadSavedNarrationSpeed(),
     }));
 
     setDocuments((prev) => [...prev, ...newDocs]);
@@ -1281,6 +1348,7 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
   };
 
   const setDocNarrationLanguage = (docId: string, language: NarrationLanguageId) => {
+    persistNarrationLanguage(language);
     setDocuments((docs) =>
       docs.map((d) => {
         if (d.id !== docId)
@@ -1305,6 +1373,23 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
         }
 
         return { ...d, narrationLanguage: language };
+      })
+    );
+  };
+
+  const setDocNarrationSpeed = (docId: string, speed: number) => {
+    const next = clampNarrationSpeed(speed);
+    persistNarrationSpeed(next);
+    setDocuments((docs) =>
+      docs.map((d) => {
+        if (d.id !== docId)
+          return d;
+
+        if (d.narrationSpeed === next)
+          return d;
+
+        // Speed lives in preview/ICL (or Kokoro TTS); chunk PCM cache stays valid for Qwen.
+        return { ...d, narrationSpeed: next };
       })
     );
   };
@@ -1513,7 +1598,7 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
   useEffect(() => {
     previewRequestIdRef.current += 1;
     stopVoicePreview();
-  }, [previewLanguageId]);
+  }, [previewLanguageId, previewSpeed]);
 
   const playVoicePreview = async (
     voiceId: string,
@@ -1529,7 +1614,7 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
 
     stopVoicePreview();
 
-    const cacheKey = `${voiceId}::${previewLanguageId}`;
+    const cacheKey = `${voiceId}::${previewLanguageId}::${previewSpeed}`;
     const requestId = ++previewRequestIdRef.current;
     let url = opts?.forceRegenerate ? undefined : previewCacheRef.current[cacheKey];
     if (!url) {
@@ -1538,7 +1623,11 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
         const response = await fetch("/api/voice-preview", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ voiceName: voiceId, language: previewLanguageId }),
+          body: JSON.stringify({
+            voiceName: voiceId,
+            language: previewLanguageId,
+            speed: previewSpeed,
+          }),
         });
         const payload = await response.json();
         if (!response.ok) {
@@ -1598,14 +1687,18 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
     setPreviewError(null);
     stopVoicePreview();
 
-    const cacheKey = `${voiceId}::${previewLanguageId}`;
+    const cacheKey = `${voiceId}::${previewLanguageId}::${previewSpeed}`;
     setPreviewDeletingVoice(voiceId);
 
     try {
       const response = await fetch("/api/voice-preview", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ voiceName: voiceId, language: previewLanguageId }),
+        body: JSON.stringify({
+          voiceName: voiceId,
+          language: previewLanguageId,
+          speed: previewSpeed,
+        }),
       });
       const payload = await response.json();
       if (!response.ok) {
@@ -1617,16 +1710,19 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
         URL.revokeObjectURL(oldUrl);
         delete previewCacheRef.current[cacheKey];
       }
-
-      await playVoicePreview(voiceId, { forceRegenerate: true });
     } catch (err: unknown) {
       console.error(err);
       setPreviewError(
-        err instanceof Error ? err.message : "Não foi possível regenerar a prévia."
+        err instanceof Error ? err.message : "Não foi possível regenerar esta prévia."
       );
+      setPreviewDeletingVoice(null);
+
+      return;
     } finally {
       setPreviewDeletingVoice((current) => (current === voiceId ? null : current));
     }
+
+    await playVoicePreview(voiceId, { forceRegenerate: true });
   };
 
   // Step 2: narrate one document (reuses disk chunk cache keyed by doc UUID)
@@ -1694,6 +1790,7 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
             (doc.fileType === "pdf" && doc.coverPage.trim() !== "")),
         sourceFileName: doc.file.name,
         language: doc.narrationLanguage,
+        speed: clampNarrationSpeed(doc.narrationSpeed),
       }),
     });
 
@@ -2975,14 +3072,26 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
                     {ttsEngine === "kokoro"
                       ? `Kokoro (${kokoroBackend === "mlx" ? "MLX" : "ONNX fp32"} · ${
                           kokoroDevice === "gpu" ? "GPU" : "CPU"
-                        }). A prévia fala no idioma do livro (${previewLanguage.label}). Passe o mouse na voz e use ↺ para excluir a prévia salva e gerar outra.`
-                      : `Motor Qwen3. A prévia em ${previewLanguage.label} vira a referência de voz da narração. Passe o mouse na voz e use ↺ para excluir a prévia salva e gerar outra.`}
+                        }). A prévia fala no idioma e na velocidade do livro (${previewLanguage.label}). Passe o mouse na voz e use ↺ para excluir a prévia salva e gerar outra.`
+                      : `Motor Qwen3. A prévia em ${previewLanguage.label} (na velocidade escolhida) vira a referência de voz da narração. Passe o mouse na voz e use ↺ para excluir a prévia salva e gerar outra.`}
                   </p>
 
                   {previewError && (
                     <div className="mb-4 flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
                       <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
                       <span>{previewError}</span>
+                    </div>
+                  )}
+
+                  {activeDoc && (
+                    <div className="mb-4">
+                      <NarrationSpeedSlider
+                        value={activeDoc.narrationSpeed}
+                        onChange={(speed) =>
+                          setDocNarrationSpeed(activeDoc.id, speed)
+                        }
+                        disabled={loading}
+                      />
                     </div>
                   )}
 

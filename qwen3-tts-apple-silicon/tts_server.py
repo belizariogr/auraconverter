@@ -110,14 +110,19 @@ DEFAULT_MAX_TOKENS = int(os.environ.get("QWEN_TTS_MAX_TOKENS", "2048"))
 DEFAULT_INSTRUCT = os.environ.get(
     "QWEN_TTS_INSTRUCT",
     (
-        "Speak as a consistent, calm, neutral book narrator. "
-        "Keep the same pitch, energy, emotion, and pace for every sentence. "
-        "Do not sound excited, dramatic, whispery, or casual."
+        "Speak as a warm audiobook narrator at a normal conversational volume. "
+        "Use a clear, natural speaking voice with light expressive emotion. "
+        "Do not whisper, murmur, or sound breathy or hushed. "
+        "Do not sound flat, robotic, overly dramatic, or theatrical. "
+        "Keep a steady storytelling pace suitable for book narration."
     ),
 )
 DEFAULT_REF_TEXT = os.environ.get(
     "QWEN_TTS_PREVIEW_TEXT",
-    "Hello. This is a preview of my voice, reading in a calm and clear tone.",
+    (
+        "This is a preview of my narration voice. "
+        "I am reading at a normal volume, clearly and with a little warmth."
+    ),
 )
 VOICE_PREVIEW_DIR = os.environ.get(
     "VOICE_PREVIEW_DIR",
@@ -125,7 +130,7 @@ VOICE_PREVIEW_DIR = os.environ.get(
 )
 # Must match Node `VOICE_PREVIEW_CACHE_VERSION` (server.ts).
 VOICE_PREVIEW_CACHE_VERSION = os.environ.get(
-    "QWEN_TTS_PREVIEW_CACHE_VERSION", "1.7b-br-v1"
+    "QWEN_TTS_PREVIEW_CACHE_VERSION", "1.7b-narrate-v1"
 )
 
 # Qwen lang_code → Node voicePreviewCacheTag used in disk filenames.
@@ -303,11 +308,13 @@ def preview_paths_for_voice(
     voice: str,
     language: Optional[str] = None,
 ) -> tuple[str, str]:
-    """Resolve WAV+TXT paths. Prefer voice_locale_version (Node), then legacy voice_version."""
+    """Resolve WAV+TXT paths. Prefer voice_locale_sNNN_version (Node), then legacy."""
     safe = resolve_voice(voice).replace(" ", "_").lower()
     locale = preview_locale_tag(language)
     keys: list[str] = []
     if locale:
+        # Default-speed tag used when Node does not pass an explicit ref path.
+        keys.append(f"{safe}_{locale}_s100_{VOICE_PREVIEW_CACHE_VERSION}")
         keys.append(f"{safe}_{locale}_{VOICE_PREVIEW_CACHE_VERSION}")
     keys.append(f"{safe}_{VOICE_PREVIEW_CACHE_VERSION}")
 

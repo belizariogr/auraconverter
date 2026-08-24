@@ -51,9 +51,14 @@ import {
   ensureFfmpeg,
   m4bToMp3AndCover,
   mp3ToM4b,
+  applyAtempoToPcm,
   pcmToM4b,
   pcmToMp3,
 } from "./mediaConvert";
+import {
+  clampNarrationSpeed,
+  narrationSpeedCacheTag,
+} from "./narrationSpeed";
 import {
   isStandalonePageNumberLine,
   PAGE_NUMBER_GAP,
@@ -117,13 +122,17 @@ const TTS_TIMEOUT_MS = Number(process.env.TTS_TIMEOUT_MS ?? process.env.DIA_TTS_
 /** Stable narrator style applied to every chunk (must match Qwen server default intent). */
 const TTS_INSTRUCT =
   process.env.QWEN_TTS_INSTRUCT ||
-  "Speak as a consistent, calm, neutral book narrator. Keep the same pitch, energy, emotion, and pace for every sentence. Do not sound excited, dramatic, whispery, or casual.";
+  "Speak as a warm audiobook narrator at a normal conversational volume. " +
+    "Use a clear, natural speaking voice with light expressive emotion. " +
+    "Do not whisper, murmur, or sound breathy or hushed. " +
+    "Do not sound flat, robotic, overly dramatic, or theatrical. " +
+    "Keep a steady storytelling pace suitable for book narration.";
 /** Qwen3-TTS official / mlx-audio default sampling temperature. Override with QWEN_TTS_TEMPERATURE. */
 const TTS_TEMPERATURE = Number(process.env.QWEN_TTS_TEMPERATURE ?? "0.9");
 const TTS_LANGUAGE = process.env.QWEN_TTS_LANGUAGE || "Auto";
 /** Bump when preview text, instruct, or ICL scheme changes so old disk samples and chunk caches are ignored. */
 const VOICE_PREVIEW_CACHE_VERSION =
-  process.env.QWEN_TTS_PREVIEW_CACHE_VERSION || "1.7b-br-v1";
+  process.env.QWEN_TTS_PREVIEW_CACHE_VERSION || "1.7b-narrate-v1";
 
 let ttsChild: ChildProcess | null = null;
 let ttsStartPromise: Promise<void> | null = null;
@@ -977,6 +986,8 @@ async function synthesizeWithTts(
     skipIcl?: boolean;
     language?: string;
     instruct?: string;
+    /** Kokoro native speed; ignored by Qwen (preview/encode use atempo). */
+    speed?: number;
   }
 ): Promise<{ pcm: Buffer; sampleRate: number; cancelled: boolean; icl?: boolean }> {
   if (signal?.aborted) {
@@ -984,6 +995,9 @@ async function synthesizeWithTts(
   }
 
   await ensureTtsRunning();
+
+  const speed =
+    opts?.speed != null ? clampNarrationSpeed(opts.speed) : undefined;
 
   const fetchOptions: RequestInit & { timeout?: boolean | number | { connect?: number | false; idle?: number | false } } = {
     method: "POST",
@@ -995,6 +1009,7 @@ async function synthesizeWithTts(
       instruct: (opts?.instruct || "").trim() || TTS_INSTRUCT,
       temperature: TTS_TEMPERATURE,
       language: opts?.language?.trim() || TTS_LANGUAGE,
+      ...(speed != null ? { speed } : {}),
       ...(opts?.refAudioPath && opts?.refText
         ? { refAudioPath: opts.refAudioPath, refText: opts.refText }
         : {}),
@@ -1654,11 +1669,14 @@ function narrationFingerprint(
   text: string,
   voice: string,
   engine: string,
-  language: string
+  language: string,
+  speed: number
 ): string {
+  const speedTag = narrationSpeedCacheTag(speed);
+
   return createHash("sha256")
     .update(
-      `${engine}\n${voice}\n${language}\n${VOICE_PREVIEW_CACHE_VERSION}\n` +
+      `${engine}\n${voice}\n${language}\n${speedTag}\n${VOICE_PREVIEW_CACHE_VERSION}\n` +
         `t=${TTS_TEMPERATURE}\n${text}`
     )
     .digest("hex")
@@ -1802,18 +1820,23 @@ async function cleanupNarrationArtifact(id: string) {
 
 /** WAV + transcript used as voice-reference (ref_audio / ref_text for ICL). */
 const VOICE_PREVIEW_DIR = path.join(AURA_ROOT, "assets", "voice-previews");
-/** In-memory WAV previews (base64) layered on disk cache. Key: voice+locale. */
+/** In-memory WAV previews (base64) layered on disk cache. Key: voice+locale+speed. */
 const voicePreviewCache = new Map<string, string>();
 
 function voicePreviewSafeKey(voiceKey: string): string {
   return voiceKey.replace(/[^a-z0-9_-]/gi, "_").toLowerCase();
 }
 
-function voicePreviewFileKey(voiceName: string, languageId: string): string {
+function voicePreviewFileKey(
+  voiceName: string,
+  languageId: string,
+  speed: number = 1
+): string {
   const voice = voicePreviewSafeKey(voiceName);
   const lang = voicePreviewSafeKey(voicePreviewCacheTag(languageId));
+  const speedTag = narrationSpeedCacheTag(speed);
 
-  return `${voice}_${lang}_${VOICE_PREVIEW_CACHE_VERSION}`;
+  return `${voice}_${lang}_${speedTag}_${VOICE_PREVIEW_CACHE_VERSION}`;
 }
 
 function voicePreviewWavPath(fileKey: string): string {
@@ -1897,12 +1920,13 @@ async function saveVoicePreviewToDisk(
   );
 }
 
-/** Remove disk WAV+TXT and in-memory preview for one voice+locale. */
+/** Remove disk WAV+TXT and in-memory preview for one voice+locale+speed. */
 async function deleteVoicePreviewFiles(
   voiceName: string,
-  languageId: string
+  languageId: string,
+  speed: number = 1
 ): Promise<{ deleted: boolean; fileKey: string }> {
-  const fileKey = voicePreviewFileKey(voiceName, languageId);
+  const fileKey = voicePreviewFileKey(voiceName, languageId, speed);
   voicePreviewCache.delete(fileKey);
 
   let deleted = false;
@@ -1920,21 +1944,24 @@ async function deleteVoicePreviewFiles(
 }
 
 /**
- * Ensure a disk WAV+TXT voice anchor exists for ICL narration.
- * One sample per speaker+locale; skipIcl generate uses that locale's preview text.
+ * Ensure a disk WAV+TXT voice anchor exists for ICL narration / UI preview.
+ * One sample per speaker+locale+speed. Qwen: TTS at 1× then atempo; Kokoro: native speed.
  */
 async function ensureVoicePreview(
   voiceName: string,
-  languageId: string
+  languageId: string,
+  speed: number = 1
 ): Promise<{ refAudioPath: string; refText: string; created: boolean }> {
   const language = resolveNarrationLanguageId(languageId);
+  const narrationSpeed = clampNarrationSpeed(speed);
   const previewText = previewTextForLanguage(language);
+  const engine = activeTtsEngine();
   const ttsLanguage = languagePayloadForTts(
     language,
-    activeTtsEngine(),
+    engine,
     readKokoroBackend(AURA_DATA_DIR)
   );
-  const fileKey = voicePreviewFileKey(voiceName, language);
+  const fileKey = voicePreviewFileKey(voiceName, language, narrationSpeed);
   const wavPath = voicePreviewWavPath(fileKey);
   const txtPath = voicePreviewTextPath(fileKey);
 
@@ -1954,7 +1981,8 @@ async function ensureVoicePreview(
       if (wavBuf.length > 0) {
         voicePreviewCache.set(fileKey, wavBuf.toString("base64"));
         console.log(
-          `[VoicePreview] Using locale anchor: ${path.basename(wavPath)} (lang=${language})`
+          `[VoicePreview] Using locale anchor: ${path.basename(wavPath)} ` +
+            `(lang=${language}, speed=${narrationSpeed})`
         );
 
         return { refAudioPath: wavPath, refText, created: false };
@@ -1965,9 +1993,10 @@ async function ensureVoicePreview(
   }
 
   console.log(
-    `[VoicePreview] Generating ICL anchor for ${voiceName} (${language})...`
+    `[VoicePreview] Generating ICL anchor for ${voiceName} ` +
+      `(${language}, speed=${narrationSpeed})...`
   );
-  const { pcm, sampleRate, cancelled } = await synthesizeWithTts(
+  const { pcm: rawPcm, sampleRate, cancelled } = await synthesizeWithTts(
     previewText,
     voiceName,
     undefined,
@@ -1976,13 +2005,24 @@ async function ensureVoicePreview(
       skipIcl: true,
       language: ttsLanguage,
       instruct: mergeQwenInstruct(language, TTS_INSTRUCT),
+      // Kokoro applies speed natively; Qwen preview is time-stretched below.
+      ...(engine === "kokoro" ? { speed: narrationSpeed } : {}),
     }
   );
-  if (cancelled || pcm.length === 0) {
+  if (cancelled || rawPcm.length === 0) {
     throw new Error(
       `Não foi possível gerar a âncora de voz para "${voiceName}". ` +
         "Toque a prévia na UI ou verifique o servidor Qwen TTS."
     );
+  }
+
+  let pcm = rawPcm;
+  if (engine === "qwen3" && Math.abs(narrationSpeed - 1) >= 0.001) {
+    pcm = await applyAtempoToPcm({
+      pcm: rawPcm,
+      sampleRate,
+      speed: narrationSpeed,
+    });
   }
 
   const samples = trimTrailingSilence(
@@ -2006,16 +2046,11 @@ app.post("/api/voice-preview", async (req, res) => {
   try {
     const engine = activeTtsEngine();
     const languageId = resolveNarrationLanguageIdFromRequest(req.body?.language);
-    const previewText = previewTextForLanguage(languageId);
-    const ttsLanguage = languagePayloadForTts(
-      languageId,
-      engine,
-      readKokoroBackend(AURA_DATA_DIR)
-    );
+    const narrationSpeed = clampNarrationSpeed(req.body?.speed);
     const voiceName =
       String(req.body?.voiceName || "").trim() ||
       (engine === "kokoro" ? "af_heart" : "Vivian");
-    const fileKey = voicePreviewFileKey(voiceName, languageId);
+    const fileKey = voicePreviewFileKey(voiceName, languageId, narrationSpeed);
 
     const memCached = voicePreviewCache.get(fileKey);
     if (memCached) {
@@ -2024,6 +2059,7 @@ app.post("/api/voice-preview", async (req, res) => {
         mimeType: "audio/wav",
         voiceName,
         language: languageId,
+        speed: narrationSpeed,
         cached: true,
         source: "memory",
         filePath: voicePreviewWavPath(fileKey),
@@ -2041,6 +2077,7 @@ app.post("/api/voice-preview", async (req, res) => {
         mimeType: "audio/wav",
         voiceName,
         language: languageId,
+        speed: narrationSpeed,
         cached: true,
         source: "disk",
         filePath: voicePreviewWavPath(fileKey),
@@ -2049,44 +2086,7 @@ app.post("/api/voice-preview", async (req, res) => {
       });
     }
 
-    // Kokoro: synthesize a short clip and persist it to disk (no ICL, so the
-    // saved WAV is just a reusable preview rather than a voice-clone anchor).
-    if (engine === "kokoro") {
-      const { pcm, sampleRate } = await synthesizeWithTts(
-        previewText,
-        voiceName,
-        undefined,
-        undefined,
-        { skipIcl: true, language: ttsLanguage, instruct: mergeQwenInstruct(languageId, TTS_INSTRUCT) }
-      );
-      didGenerate = true;
-      if (pcm.length === 0) {
-        throw new Error("Prévia Kokoro vazia.");
-      }
-
-      const samples = trimTrailingSilence(
-        new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 2)),
-        sampleRate
-      );
-      const wavBuffer = encodePcmToWav(samples, sampleRate);
-      const audioData = wavBuffer.toString("base64");
-      voicePreviewCache.set(fileKey, audioData);
-      await saveVoicePreviewToDisk(fileKey, wavBuffer, previewText);
-
-      return res.json({
-        audioData,
-        mimeType: "audio/wav",
-        voiceName,
-        language: languageId,
-        cached: false,
-        source: "generated",
-        filePath: voicePreviewWavPath(fileKey),
-        textPath: voicePreviewTextPath(fileKey),
-        engine,
-      });
-    }
-
-    const anchor = await ensureVoicePreview(voiceName, languageId);
+    const anchor = await ensureVoicePreview(voiceName, languageId, narrationSpeed);
     didGenerate = anchor.created;
     const audioData =
       voicePreviewCache.get(fileKey) ||
@@ -2098,6 +2098,7 @@ app.post("/api/voice-preview", async (req, res) => {
       mimeType: "audio/wav",
       voiceName,
       language: languageId,
+      speed: narrationSpeed,
       cached: false,
       source: "generated",
       filePath: anchor.refAudioPath,
@@ -2122,17 +2123,23 @@ app.post("/api/voice-preview", async (req, res) => {
 app.delete("/api/voice-preview", async (req, res) => {
   try {
     const languageId = resolveNarrationLanguageIdFromRequest(req.body?.language);
+    const narrationSpeed = clampNarrationSpeed(req.body?.speed);
     const voiceName = String(req.body?.voiceName || "").trim();
 
     if (!voiceName) {
       return res.status(400).json({ error: "O nome da voz é obrigatório." });
     }
 
-    const { deleted, fileKey } = await deleteVoicePreviewFiles(voiceName, languageId);
+    const { deleted, fileKey } = await deleteVoicePreviewFiles(
+      voiceName,
+      languageId,
+      narrationSpeed
+    );
 
     return res.json({
       voiceName,
       language: languageId,
+      speed: narrationSpeed,
       deleted,
       fileKey,
       engine: activeTtsEngine(),
@@ -2771,6 +2778,7 @@ app.post("/api/narrate-stream", async (req, res) => {
       sourceFileName,
       docId: reqDocId,
       language: reqLanguage,
+      speed: reqSpeed,
     } = req.body;
     taskId = reqTaskId;
     const docId =
@@ -2786,6 +2794,7 @@ app.post("/api/narrate-stream", async (req, res) => {
     const engine = activeTtsEngine();
     const languageId = resolveNarrationLanguageIdFromRequest(reqLanguage);
     const ttsLanguage = resolveNarrationLanguagePayload(reqLanguage);
+    const narrationSpeed = clampNarrationSpeed(reqSpeed);
     const outputFormat: "mp3" | "m4b" =
       reqOutputFormat === "m4b" ? "m4b" : "mp3";
     const includeCover = reqIncludeCover !== false;
@@ -2806,7 +2815,7 @@ app.post("/api/narrate-stream", async (req, res) => {
     }
 
     console.log(
-      `[NarrateStream] textProvided=${!!providedText}, Type: ${type}, Start: ${start}, End: ${end}, Voice: ${voice}, Language: ${ttsLanguage}`
+      `[NarrateStream] textProvided=${!!providedText}, Type: ${type}, Start: ${start}, End: ${end}, Voice: ${voice}, Language: ${ttsLanguage}, Speed: ${narrationSpeed}`
     );
 
     let extractedText = "";
@@ -2902,7 +2911,7 @@ app.post("/api/narrate-stream", async (req, res) => {
       total: totalChunks,
     });
 
-    // Qwen: ensure preview WAV+TXT for ICL. Kokoro: speaker id only.
+    // Qwen: ensure preview WAV+TXT for ICL (at selected speed). Kokoro: speaker id + native speed.
     let voiceAnchor: { refAudioPath: string; refText: string } | null = null;
     if (engine === "qwen3") {
       sendEvent({
@@ -2911,7 +2920,7 @@ app.post("/api/narrate-stream", async (req, res) => {
         message: "Preparando âncora de voz (prévia) para tom consistente...",
       });
       try {
-        voiceAnchor = await ensureVoicePreview(voice, languageId);
+        voiceAnchor = await ensureVoicePreview(voice, languageId, narrationSpeed);
         console.log(`[NarrateStream] Voice anchor: ${voiceAnchor.refAudioPath}`);
       } catch (anchorErr: any) {
         sendEvent({
@@ -2937,7 +2946,8 @@ app.post("/api/narrate-stream", async (req, res) => {
       extractedText,
       voice,
       engine,
-      ttsLanguage
+      ttsLanguage,
+      narrationSpeed
     );
 
     let cacheMeta: ChunkCacheMeta | null = null;
@@ -3034,6 +3044,7 @@ app.post("/api/narrate-stream", async (req, res) => {
                   skipIcl: true,
                   language: ttsLanguage,
                   instruct: mergeQwenInstruct(languageId, TTS_INSTRUCT),
+                  ...(engine === "kokoro" ? { speed: narrationSpeed } : {}),
                 }
           );
           pcm = result.pcm;
@@ -3188,6 +3199,7 @@ app.post("/api/narrate-stream", async (req, res) => {
     let finalAudioPath = mp3Path;
     let finalFormat: "mp3" | "m4b" = "mp3";
     let mimeType = "audio/mpeg";
+    // Speed is already in the preview/ICL (Qwen) or Kokoro TTS PCM — do not atempo again.
 
     try {
       await ensureFfmpeg();
@@ -3332,10 +3344,11 @@ app.post("/api/narrate", async (req, res) => {
     });
 
     const engine = activeTtsEngine();
+    const narrationSpeed = clampNarrationSpeed(req.body?.speed);
     const textChunks = splitTextIntoChunks(extractedText, engine);
     let voiceAnchor: { refAudioPath: string; refText: string } | null = null;
     if (engine === "qwen3") {
-      voiceAnchor = await ensureVoicePreview(voice, languageId);
+      voiceAnchor = await ensureVoicePreview(voice, languageId, narrationSpeed);
     }
 
     ensureNarrationTmpDir();
@@ -3376,6 +3389,7 @@ app.post("/api/narrate", async (req, res) => {
                 skipIcl: true,
                 language: ttsLanguage,
                 instruct: mergeQwenInstruct(languageId, TTS_INSTRUCT),
+                ...(engine === "kokoro" ? { speed: narrationSpeed } : {}),
               }
         );
         sampleRate = sr;

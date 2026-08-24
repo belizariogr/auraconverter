@@ -309,11 +309,24 @@ class TtsRequest(BaseModel):
     language: Optional[str] = None
     instruct: Optional[str] = None
     temperature: Optional[float] = None
+    speed: Optional[float] = None
     refAudioPath: Optional[str] = None
     refText: Optional[str] = None
     skipIcl: Optional[bool] = None
     jobId: Optional[str] = None
     seed: Optional[int] = None
+
+
+def clamp_speed(value: Optional[float]) -> float:
+    if value is None:
+        return DEFAULT_SPEED
+    try:
+        speed = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_SPEED
+    if speed != speed or speed <= 0:  # NaN or non-positive
+        return DEFAULT_SPEED
+    return max(0.75, min(1.5, speed))
 
 
 class CancelRequest(BaseModel):
@@ -398,12 +411,13 @@ def tts(req: TtsRequest) -> dict[str, Any]:
 
     voice = resolve_voice(req.voice)
     language = resolve_lang_code(req.language)
+    speed = clamp_speed(req.speed)
     job_id = req.jobId
     clear_cancel(job_id)
 
     print(
         f"[kokoro-mlx] /tts voice={voice!r} lang={language!r} "
-        f"jobId={job_id or '-'} chars={len(text)}"
+        f"speed={speed} jobId={job_id or '-'} chars={len(text)}"
     )
 
     if job_cancelled(job_id):
@@ -419,7 +433,7 @@ def tts(req: TtsRequest) -> dict[str, Any]:
 
     try:
         audio, sample_rate = synthesize(
-            text, voice, DEFAULT_SPEED, job_id=job_id, language=language
+            text, voice, speed, job_id=job_id, language=language
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

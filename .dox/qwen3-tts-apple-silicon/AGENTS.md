@@ -17,9 +17,9 @@ Qwen3-TTS FastAPI server on Apple Silicon (MLX). Used by `server.ts` on darwin.
 - Node splits Qwen prompts to ~280 chars; Kokoro may pack 5 paragraphs.
 - Do **not** insert `<break>` into extracted text when the engine is Qwen. Node replaces those lines with `\n\n\n`. Collapse intra-line whitespace only; keep newlines.
 - CustomVoice `generate()` ignores `split_pattern`; Node owns text chunking.
-- Preview WAV+TXT under `assets/voice-previews/` are ICL anchors for Base (one per voice+locale). Filename: `{voice}_{locale}_{QWEN_TTS_PREVIEW_CACHE_VERSION}` (e.g. `vivian_pt-br_1.7b-br-v1`). Current version default: `1.7b-br-v1` (regenerate after switching to 1.7B).
+- Preview WAV+TXT under `assets/voice-previews/` are ICL anchors for Base (one per voice+locale+speed). Filename: `{voice}_{locale}_{sNNN}_{QWEN_TTS_PREVIEW_CACHE_VERSION}` (e.g. `vivian_pt-br_s100_1.7b-narrate-v1`). Current version default: `1.7b-narrate-v1`. Speed ≠ 1× is applied with ffmpeg `atempo` after CustomVoice generate, then saved — narrate uses that same file as `ref_audio`.
 - **Preview bootstrap (`skipIcl`)** must use **CustomVoice** speaker presets — Base has no built-in voices and would make every preview identical.
-- Narration with Base loads the saved preview WAV and clones via ICL (`ref_audio` + `ref_text`; do not pass `voice` on that path). ICL **ignores** `instruct` — Brazilian accent must be baked into the preview WAV (CustomVoice + `qwenInstruct` + BR lexical `previewText`).
+- Narration with Base loads the saved preview WAV (matching language + speed) and clones via ICL (`ref_audio` + `ref_text`; do not pass `voice` on that path). ICL **ignores** `instruct` — delivery style (normal volume, light emotion, no whisper) must be baked into the preview WAV via CustomVoice `instruct` + `previewText`. Do **not** apply encode-time `atempo` on top — speed already lives in the ICL preview.
 - Fallback `load_preview_anchor(voice, language)` resolves locale-aware paths (`Portuguese` → `pt-br`); legacy `voice_version` names still accepted.
 - PCM encode path: float→int16 with clip only if peak > 1.0; no loudness/EQ. MP3/M4B encode at native 24 kHz (no aresample).
 

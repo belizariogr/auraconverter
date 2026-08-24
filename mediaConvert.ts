@@ -206,6 +206,108 @@ function pcmDurationSeconds(pcmPath: string, sampleRate: number): Promise<number
   return fs.promises.stat(pcmPath).then((stat) => stat.size / (sampleRate * 2));
 }
 
+/**
+ * ffmpeg `atempo` only accepts 0.5–2.0 per filter; chain for other factors.
+ * Returns null when speed is ~1 (no filter needed).
+ */
+export function buildAtempoFilter(speed: number): string | null {
+  if (!Number.isFinite(speed) || speed <= 0) {
+    return null;
+  }
+
+  if (Math.abs(speed - 1) < 0.001) {
+    return null;
+  }
+
+  const factors: number[] = [];
+  let remaining = speed;
+
+  while (remaining > 2.0 + 1e-9) {
+    factors.push(2.0);
+    remaining /= 2.0;
+  }
+
+  while (remaining < 0.5 - 1e-9) {
+    factors.push(0.5);
+    remaining /= 0.5;
+  }
+
+  factors.push(Number(remaining.toFixed(6)));
+
+  return factors.map((f) => `atempo=${f}`).join(",");
+}
+
+function encodeAudioFilterArgs(speed?: number): string[] {
+  const filter = buildAtempoFilter(speed ?? 1);
+
+  if (!filter) {
+    return [];
+  }
+
+  return ["-af", filter];
+}
+
+/**
+ * Time-stretch mono PCM s16le with ffmpeg `atempo`.
+ * Returns the input buffer unchanged when speed is ~1.
+ */
+export async function applyAtempoToPcm(opts: {
+  pcm: Buffer;
+  sampleRate: number;
+  speed: number;
+}): Promise<Buffer> {
+  const filter = buildAtempoFilter(opts.speed);
+
+  if (!filter) {
+    return opts.pcm;
+  }
+
+  if (!opts.pcm.length || opts.pcm.length % 2 !== 0) {
+    throw new Error("PCM16 inválido para ajuste de velocidade.");
+  }
+
+  if (!Number.isInteger(opts.sampleRate) || opts.sampleRate < 8000) {
+    throw new Error(`Sample rate inválido para atempo: ${opts.sampleRate}.`);
+  }
+
+  await ensureFfmpeg();
+  const inPath = uniqueMediaPath("pcm");
+  const outPath = uniqueMediaPath("pcm");
+
+  try {
+    await fs.promises.writeFile(inPath, opts.pcm);
+    await runFfmpeg([
+      "-f",
+      "s16le",
+      "-ar",
+      String(opts.sampleRate),
+      "-ac",
+      "1",
+      "-i",
+      inPath,
+      "-af",
+      filter,
+      "-f",
+      "s16le",
+      "-ar",
+      String(opts.sampleRate),
+      "-ac",
+      "1",
+      outPath,
+    ]);
+    const out = await fs.promises.readFile(outPath);
+
+    if (!out.length || out.length % 2 !== 0) {
+      throw new Error("Saída PCM inválida após atempo.");
+    }
+
+    return out;
+  } finally {
+    await fs.promises.unlink(inPath).catch(() => undefined);
+    await fs.promises.unlink(outPath).catch(() => undefined);
+  }
+}
+
 /** Books/QuickTime treat extra JPEG tracks as video. Mux a single front cover. */
 function frontCoverPaths(paths: string[] | undefined): string[] {
   const found = (paths || []).find((p) => p && fs.existsSync(p));
@@ -229,15 +331,19 @@ export async function pcmToMp3(opts: {
   pcmPath: string;
   outputPath?: string;
   sampleRate?: number;
+  /** Playback speed multiplier (1 = normal). Applied with ffmpeg atempo. */
+  speed?: number;
   onProgress?: (p: FfmpegProgress) => void;
   signal?: AbortSignal;
 }): Promise<string> {
   await ensureFfmpeg();
   const out = opts.outputPath || uniqueMediaPath("mp3");
   const sampleRate = opts.sampleRate || 24000;
-  const totalSec = await pcmDurationSeconds(opts.pcmPath, sampleRate);
+  const speed = opts.speed && opts.speed > 0 ? opts.speed : 1;
+  const pcmSec = await pcmDurationSeconds(opts.pcmPath, sampleRate);
+  const totalSec = pcmSec / speed;
 
-  // Encode at the native TTS rate — no aresample / loudness / EQ post-processing.
+  // Encode at the native TTS rate — optional atempo only (no loudness / EQ).
   await runFfmpeg(
     [
       "-f",
@@ -248,6 +354,7 @@ export async function pcmToMp3(opts: {
       "1",
       "-i",
       opts.pcmPath,
+      ...encodeAudioFilterArgs(speed),
       "-ac",
       "1",
       "-ar",
@@ -271,6 +378,8 @@ export async function pcmToM4b(opts: {
   pcmPath: string;
   outputPath?: string;
   sampleRate?: number;
+  /** Playback speed multiplier (1 = normal). Applied with ffmpeg atempo. */
+  speed?: number;
   artworkPaths?: string[];
   title?: string;
   onProgress?: (p: FfmpegProgress) => void;
@@ -279,7 +388,9 @@ export async function pcmToM4b(opts: {
   await ensureFfmpeg();
   const out = opts.outputPath || uniqueMediaPath("m4b");
   const sampleRate = opts.sampleRate || 24000;
-  const totalSec = await pcmDurationSeconds(opts.pcmPath, sampleRate);
+  const speed = opts.speed && opts.speed > 0 ? opts.speed : 1;
+  const pcmSec = await pcmDurationSeconds(opts.pcmPath, sampleRate);
+  const totalSec = pcmSec / speed;
   const artworks = frontCoverPaths(opts.artworkPaths);
   const args = [
     "-f",
@@ -295,7 +406,8 @@ export async function pcmToM4b(opts: {
 
   args.push("-map", "0:a");
   for (let i = 0; i < artworks.length; i++) args.push("-map", `${i + 1}:v`);
-  // Encode at the native TTS rate — no aresample / loudness / EQ post-processing.
+  // Encode at the native TTS rate — optional atempo only (no loudness / EQ).
+  args.push(...encodeAudioFilterArgs(speed));
   args.push(
     "-ac",
     "1",

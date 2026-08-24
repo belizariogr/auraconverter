@@ -12,6 +12,7 @@ Kokoro TTS: ONNX Runtime (`tts_server.py`) and MLX (`tts_server_mlx.py`).
 - Drive `generate(..., split_pattern=None)` and hold `mx.clear_cache` for the whole request. mlx-audio otherwise splits on `\\n+` and wipes Metal between windows (M5: first window OK, rest harsh).
 - Do not force `MLX_ENABLE_TF32=0` (M5 Neural Accelerators; large slowdown).
 - Ignore ICL fields.
+- Accept optional `/tts` `speed` (0.75–1.5, default `KOKORO_SPEED` / 1.0) for preview and narration.
 
 ## Work Guidance
 

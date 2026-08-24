@@ -53,9 +53,9 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroOnnx: "en-us",
     kokoroNative: false,
     previewText:
-      "Oi, tudo bem com você? Esta é uma prévia da minha voz brasileira. " +
-      "Estou lendo agora com calma e clareza, em português do Brasil — " +
-      "falando de ônibus, celular e um dia bem legal na cidade.",
+      "Esta é uma prévia da minha voz para narração de livros. " +
+      "Estou falando em tom normal, claro e com um pouco de emoção, " +
+      "em português do Brasil — com você, o celular e o ônibus no caminho pela cidade.",
     qwenInstruct: "",
   },
   {
@@ -66,16 +66,16 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroMlx: "p",
     kokoroOnnx: "pt-br",
     kokoroNative: true,
-    // Lexical BR markers (você/celular/ônibus/legal) steer CustomVoice away from European PT.
+    // Lexical BR markers (você/celular/ônibus) steer CustomVoice away from European PT.
     previewText:
-      "Oi, tudo bem com você? Esta é uma prévia da minha voz brasileira. " +
-      "Estou lendo agora com calma e clareza, em português do Brasil — " +
-      "falando de ônibus, celular e um dia bem legal na cidade.",
+      "Esta é uma prévia da minha voz para narração de livros. " +
+      "Estou falando em tom normal, claro e com um pouco de emoção, " +
+      "em português do Brasil — com você, o celular e o ônibus no caminho pela cidade.",
     qwenInstruct:
       "Speak Brazilian Portuguese from Brazil only (português brasileiro / sotaque do Brasil). " +
       "Use Brazilian pronunciation and vocabulary (você, celular, ônibus). " +
       "Do not use a European Portuguese accent from Portugal (tu/telemóvel/autocarro). " +
-      "Calm, clear, neutral book narrator.",
+      "Normal speaking volume; warm audiobook narrator with light emotion — not a whisper.",
   },
   {
     id: "en-US",
@@ -86,7 +86,8 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroOnnx: "en-us",
     kokoroNative: true,
     previewText:
-      "Hello. This is a preview of my voice, reading in a calm and clear tone.",
+      "This is a preview of my narration voice. " +
+      "I am reading at a normal volume, clearly and with a little warmth.",
     qwenInstruct: "",
   },
   {
@@ -98,9 +99,11 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroOnnx: "en-gb",
     kokoroNative: true,
     previewText:
-      "Hello. This is a preview of my voice, reading in a calm and clear tone.",
+      "This is a preview of my narration voice. " +
+      "I am reading at a normal volume, clearly and with a little warmth.",
     qwenInstruct:
-      "Speak British English (UK), not American English. Calm, clear, neutral book narrator.",
+      "Speak British English (UK), not American English. " +
+      "Normal speaking volume; warm audiobook narrator with light emotion — not a whisper.",
   },
   {
     id: "es-ES",
@@ -111,7 +114,8 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroOnnx: "es",
     kokoroNative: true,
     previewText:
-      "Hola. Esta es una muestra de mi voz, leyendo con un tono calmo y claro.",
+      "Hola. Esta es una muestra de mi voz para narración. " +
+      "Leo en un tono normal, claro y con un poco de emoción.",
     qwenInstruct: "",
   },
   {
@@ -123,7 +127,8 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroOnnx: "fr-fr",
     kokoroNative: true,
     previewText:
-      "Bonjour. Voici un aperçu de ma voix, qui lit d'un ton calme et clair.",
+      "Bonjour. Voici un aperçu de ma voix de narration. " +
+      "Je lis à volume normal, clairement et avec un peu de chaleur.",
     qwenInstruct: "",
   },
   {
