@@ -155,6 +155,7 @@ Aura Converter / AuraReader: Electron + Express app that extracts PDF/EPUB text,
 When the user requests a durable behavior change, record it here or in the relevant child doc under `.dox/`
 
 - UI copy and API errors in **pt-BR**; code identifiers in English
+- Default HTTP app port is **59500** (`PORT` env; `server.ts` + `electron/main.cjs`) — high ephemeral range, avoids clashing with common local stacks
 - M4B must embed **one** cover: the OPF `cover-image` / largest cover-like JPEG — never every EPUB illustration (Books/QuickTime treat extra JPEGs as video)
 - Encode AAC/MP3 at native TTS sample rate; no aresample upsample, loudness, or EQ filters on encode
 - Qwen3-TTS sampling defaults match official / mlx-audio: `temperature=0.9`, `top_k=50`, `top_p=1.0`, `repetition_penalty=1.05`, `max_tokens=2048` (override via `QWEN_TTS_*` env). Do not use low temperature (e.g. 0.3) — it degenerates codec tokens into silence/beeps/dropouts

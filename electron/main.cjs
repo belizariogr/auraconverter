@@ -9,7 +9,7 @@ const fs = require("fs");
 const http = require("http");
 const os = require("os");
 
-const APP_PORT = process.env.PORT || "3000";
+const APP_PORT = process.env.PORT || "59500";
 const APP_URL = `http://127.0.0.1:${APP_PORT}`;
 const TTS_PORT = process.env.TTS_PORT || process.env.DIA_PORT || "8765";
 const TTS_URL = process.env.TTS_URL || process.env.DIA_URL || `http://127.0.0.1:${TTS_PORT}`;

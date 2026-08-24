@@ -55,7 +55,7 @@ bun start
 Isso sobe:
 
 1. O servidor Qwen3 TTS em `http://127.0.0.1:8765`
-2. O app Aura Converter em `http://0.0.0.0:3000` (após o TTS ficar pronto)
+2. O app Aura Converter em `http://0.0.0.0:59500` (após o TTS ficar pronto)
 
 ### Scripts úteis
 
@@ -68,6 +68,7 @@ Isso sobe:
 ### Variáveis de ambiente
 
 ```bash
+PORT=59500                        # opcional (default; evita conflito com stacks comuns)
 TTS_URL=http://127.0.0.1:8765   # opcional
 TTS_PORT=8765                     # opcional
 QWEN_TTS_MODEL=Qwen3-TTS-12Hz-1.7B-Base-8bit   # ICL; fallback automático para CustomVoice se Base ausente

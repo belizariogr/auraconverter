@@ -105,7 +105,7 @@ dotenv.config({ path: path.join(AURA_ROOT, ".env") });
 dotenv.config();
 
 const app = express();
-const PORT = Number(process.env.PORT || 3000);
+const PORT = Number(process.env.PORT || 59500);
 const TTS_URL = process.env.TTS_URL || process.env.DIA_URL || "http://127.0.0.1:8765";
 const TTS_PORT =
   process.env.TTS_PORT ||
