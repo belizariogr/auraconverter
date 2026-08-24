@@ -154,11 +154,6 @@ function runPip(py, args) {
   if (r.status !== 0) throw new Error(`pip failed: ${args.join(" ")}`);
 }
 
-function hasGit() {
-  const r = spawnSync("git", ["--version"], { stdio: "ignore" });
-  return r.status === 0;
-}
-
 async function main() {
   if (process.platform !== "darwin") {
     throw new Error("setup-mlx-tts is only for macOS");
@@ -172,11 +167,6 @@ async function main() {
   }
   if (!fs.existsSync(path.join(mlxSrc, "requirements.txt"))) {
     throw new Error("qwen3-tts-apple-silicon/requirements.txt missing");
-  }
-  if (!hasGit()) {
-    throw new Error(
-      "git is required to install mlx-audio from GitHub. Install Xcode Command Line Tools (xcode-select --install)."
-    );
   }
 
   const existing = venvPython();

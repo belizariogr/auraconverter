@@ -992,7 +992,18 @@ export default function ModelSetup({
             ))}
           </ul>
 
-          <p className="text-[11px] text-slate-500 font-mono mb-5 break-all">Destino: {localDir}</p>
+          <div className="mb-5 rounded-2xl border border-white/10 bg-slate-900/40 px-4 py-3 space-y-1.5">
+            <p className="text-xs font-medium text-slate-300">
+              Arquivos salvos em
+            </p>
+            <p className="text-[11px] text-slate-400 font-mono break-all leading-relaxed select-all">
+              {localDir}
+            </p>
+            <p className="text-[11px] text-slate-500 leading-relaxed">
+              Pasta dos pesos do motor selecionado. Para liberar espaço, use Excluir
+              acima ou apague esta pasta manualmente no Finder / Explorador de arquivos.
+            </p>
+          </div>
 
           {downloading && (
             <div className="mb-6 rounded-2xl border border-white/10 bg-slate-900/50 p-4 space-y-4">

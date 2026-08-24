@@ -11,8 +11,8 @@ import time
 from pathlib import Path
 
 
-BASE_MODEL = "Qwen3-TTS-12Hz-0.6B-Base-8bit"
-CUSTOM_MODEL = "Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
+BASE_MODEL = "Qwen3-TTS-12Hz-1.7B-Base-8bit"
+CUSTOM_MODEL = "Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
 
 MODELS = [
     {

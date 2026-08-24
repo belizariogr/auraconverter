@@ -122,8 +122,8 @@ Tabela de download condicionada à plataforma (igual para CUDA e ROCm — mesmos
 
 | Plataforma | Base | CustomVoice |
 |---|---|---|
-| darwin | `mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit` | `mlx-community/...-CustomVoice-8bit` |
-| win/linux | `Qwen/Qwen3-TTS-12Hz-0.6B-Base` | `Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice` |
+| darwin | `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit` | `mlx-community/...-CustomVoice-8bit` |
+| win/linux | `Qwen/Qwen3-TTS-12Hz-1.7B-Base` | `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` |
 
 Tokenizer oficial (`Qwen/Qwen3-TTS-Tokenizer-12Hz`) entra na lista Win/Linux se o load local exigir pasta separada; caso `from_pretrained` resolva sozinho a partir do model dir, não empacotar/duplicar.
 

@@ -225,14 +225,6 @@ function pushCoverEncodeArgs(args: string[]): void {
   );
 }
 
-/**
- * MP3/AAC use fixed block sizes in samples, so at 24 kHz each block spans twice
- * as much time as at 48 kHz and plosives ("t", "k") smear into a "ch"-like
- * pre-echo. Upsampling 2x before the codec halves the block duration and keeps
- * transients crisp; it adds no fake frequency content.
- */
-const ENCODE_SAMPLE_RATE = 48000;
-
 export async function pcmToMp3(opts: {
   pcmPath: string;
   outputPath?: string;
@@ -245,6 +237,7 @@ export async function pcmToMp3(opts: {
   const sampleRate = opts.sampleRate || 24000;
   const totalSec = await pcmDurationSeconds(opts.pcmPath, sampleRate);
 
+  // Encode at the native TTS rate — no aresample / loudness / EQ post-processing.
   await runFfmpeg(
     [
       "-f",
@@ -255,10 +248,10 @@ export async function pcmToMp3(opts: {
       "1",
       "-i",
       opts.pcmPath,
-      "-af",
-      `aresample=${ENCODE_SAMPLE_RATE}:filter_size=64:cutoff=0.97`,
       "-ac",
       "1",
+      "-ar",
+      String(sampleRate),
       "-c:a",
       "libmp3lame",
       "-q:a",
@@ -302,11 +295,12 @@ export async function pcmToM4b(opts: {
 
   args.push("-map", "0:a");
   for (let i = 0; i < artworks.length; i++) args.push("-map", `${i + 1}:v`);
+  // Encode at the native TTS rate — no aresample / loudness / EQ post-processing.
   args.push(
-    "-af",
-    `aresample=${ENCODE_SAMPLE_RATE}:filter_size=64:cutoff=0.97`,
     "-ac",
     "1",
+    "-ar",
+    String(sampleRate),
     "-c:a",
     "aac",
     "-profile:a",
@@ -316,8 +310,14 @@ export async function pcmToM4b(opts: {
     "-aac_coder",
     "twoloop"
   );
-  if (artworks.length > 0) pushCoverEncodeArgs(args);
-  if (opts.title) args.push("-metadata", `title=${opts.title}`);
+  if (artworks.length > 0) {
+    pushCoverEncodeArgs(args);
+  }
+
+  if (opts.title) {
+    args.push("-metadata", `title=${opts.title}`);
+  }
+
   args.push("-movflags", "+faststart", "-f", "mp4", out);
 
   await runFfmpeg(args, { totalSec, onProgress: opts.onProgress, signal: opts.signal });

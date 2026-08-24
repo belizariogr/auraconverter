@@ -1,6 +1,6 @@
 # Aura Converter
 
-Narrador de PDF/EPUB para **MP3** ou **M4B**. Extração de texto 100% local (pdf.js / epub2); síntese de voz com **Qwen3-TTS** local via MLX (`qwen3-tts-apple-silicon/`, modelos Lite 0.6B).
+Narrador de PDF/EPUB para **MP3** ou **M4B**. Extração de texto 100% local (pdf.js / epub2); síntese de voz com **Qwen3-TTS** local via MLX (`qwen3-tts-apple-silicon/`, modelos Pro **1.7B 8-bit**).
 
 ## Modos do app
 
@@ -25,7 +25,7 @@ Na narração:
 - [Bun](https://bun.sh)
 - macOS Apple Silicon (M1/M2/M3/M4)
 - Python 3.12+ com o venv em `qwen3-tts-apple-silicon/.venv`
-- Modelo **Base** Lite (recomendado, ICL) e/ou CustomVoice em `qwen3-tts-apple-silicon/models/`
+- Modelo **Base** 1.7B 8-bit (recomendado, ICL) e CustomVoice 1.7B 8-bit em `qwen3-tts-apple-silicon/models/`
 - `ffmpeg` — embutido no pacote Electron (`dist:*`); em desenvolvimento: `brew install ffmpeg` (ou rode `prepare:mac` para baixar em `build/app-resources/bin`)
 
 ## Setup do TTS (uma vez)
@@ -37,10 +37,10 @@ source .venv/bin/activate
 pip install -r requirements.txt fastapi 'uvicorn[standard]'
 
 # Base (recomendado): voice cloning / ICL — trava o tom entre blocos usando a prévia em cache
-python -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit', local_dir='models/Qwen3-TTS-12Hz-0.6B-Base-8bit')"
+python -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit', local_dir='models/Qwen3-TTS-12Hz-1.7B-Base-8bit')"
 
-# CustomVoice (opcional): gera as prévias/âncoras iniciais e fallback se Base não estiver instalado
-python -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit', local_dir='models/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit')"
+# CustomVoice: gera as prévias/âncoras iniciais e fallback se Base não estiver instalado
+python -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit', local_dir='models/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit')"
 ```
 
 Com o Base instalado, cada voz usa o WAV em `assets/voice-previews/` como `ref_audio` + transcript como `ref_text` em **todos** os blocos.
@@ -70,8 +70,8 @@ Isso sobe:
 ```bash
 TTS_URL=http://127.0.0.1:8765   # opcional
 TTS_PORT=8765                     # opcional
-QWEN_TTS_MODEL=Qwen3-TTS-12Hz-0.6B-Base-8bit   # ICL; fallback automático para CustomVoice se Base ausente
+QWEN_TTS_MODEL=Qwen3-TTS-12Hz-1.7B-Base-8bit   # ICL; fallback automático para CustomVoice se Base ausente
 QWEN_TTS_VOICE=Vivian             # opcional
 QWEN_TTS_LANGUAGE=Auto            # opcional
-QWEN_TTS_TEMPERATURE=0.3          # amostragem baixa; identidade vem da âncora ICL
+QWEN_TTS_TEMPERATURE=0.9          # default oficial Qwen3-TTS / mlx-audio
 ```

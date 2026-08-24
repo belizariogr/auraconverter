@@ -38,34 +38,34 @@ export type ModelSpec = {
 const MLX_MODELS: ModelSpec[] = [
   {
     id: "base",
-    folder: "Qwen3-TTS-12Hz-0.6B-Base-8bit",
-    label: "Base (ICL / clonagem de voz)",
-    repo: "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
-    approxBytes: 2_000_000_000,
+    folder: "Qwen3-TTS-12Hz-1.7B-Base-8bit",
+    label: "Base 1.7B (ICL / clonagem de voz)",
+    repo: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
+    approxBytes: 2_800_000_000,
   },
   {
     id: "custom",
-    folder: "Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit",
-    label: "CustomVoice (prévias e speakers)",
-    repo: "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit",
-    approxBytes: 2_000_000_000,
+    folder: "Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
+    label: "CustomVoice 1.7B (prévias e speakers)",
+    repo: "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
+    approxBytes: 2_800_000_000,
   },
 ];
 
 const TORCH_MODELS: ModelSpec[] = [
   {
     id: "base",
-    folder: "Qwen3-TTS-12Hz-0.6B-Base",
-    label: "Base (ICL / clonagem de voz)",
-    repo: "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
-    approxBytes: 1_500_000_000,
+    folder: "Qwen3-TTS-12Hz-1.7B-Base",
+    label: "Base 1.7B (ICL / clonagem de voz)",
+    repo: "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+    approxBytes: 3_500_000_000,
   },
   {
     id: "custom",
-    folder: "Qwen3-TTS-12Hz-0.6B-CustomVoice",
-    label: "CustomVoice (prévias e speakers)",
-    repo: "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
-    approxBytes: 1_500_000_000,
+    folder: "Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    label: "CustomVoice 1.7B (prévias e speakers)",
+    repo: "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    approxBytes: 3_500_000_000,
   },
 ];
 

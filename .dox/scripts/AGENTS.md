@@ -13,6 +13,7 @@ Build, pack, and TTS environment setup.
 
 - Packaged app reads `AURA_ROOT` from extraResources `aura/`.
 - Do not assume system ffmpeg in production; use `ffmpegBin.ts` resolution.
+- `setup-mlx-tts.cjs` installs `mlx-audio` from PyPI (`requirements.txt`); git is not required for that pin.
 
 ## Work Guidance
 

@@ -31,8 +31,8 @@ PORT = int(os.environ.get("QWEN_TTS_PORT", os.environ.get("DIA_PORT", "8765")))
 HOST = os.environ.get("QWEN_TTS_HOST", "127.0.0.1")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
-BASE_MODEL_FOLDER = "Qwen3-TTS-12Hz-0.6B-Base"
-CUSTOM_MODEL_FOLDER = "Qwen3-TTS-12Hz-0.6B-CustomVoice"
+BASE_MODEL_FOLDER = "Qwen3-TTS-12Hz-1.7B-Base"
+CUSTOM_MODEL_FOLDER = "Qwen3-TTS-12Hz-1.7B-CustomVoice"
 MODELS_DIR = os.environ.get(
     "QWEN_TTS_MODELS_DIR",
     os.path.join(SCRIPT_DIR, "models"),
@@ -40,7 +40,12 @@ MODELS_DIR = os.environ.get(
 
 DEFAULT_VOICE = os.environ.get("QWEN_TTS_VOICE", "vivian")
 DEFAULT_LANGUAGE = os.environ.get("QWEN_TTS_LANGUAGE", "Auto")
-DEFAULT_TEMPERATURE = float(os.environ.get("QWEN_TTS_TEMPERATURE", "0.3"))
+# Official Qwen3-TTS hard defaults (generate_config / qwen3_tts_model.py).
+DEFAULT_TEMPERATURE = float(os.environ.get("QWEN_TTS_TEMPERATURE", "0.9"))
+DEFAULT_TOP_K = int(os.environ.get("QWEN_TTS_TOP_K", "50"))
+DEFAULT_TOP_P = float(os.environ.get("QWEN_TTS_TOP_P", "1.0"))
+DEFAULT_REPETITION_PENALTY = float(os.environ.get("QWEN_TTS_REPETITION_PENALTY", "1.05"))
+DEFAULT_MAX_NEW_TOKENS = int(os.environ.get("QWEN_TTS_MAX_TOKENS", "2048"))
 DEFAULT_INSTRUCT = os.environ.get(
     "QWEN_TTS_INSTRUCT",
     (
@@ -57,7 +62,25 @@ VOICE_PREVIEW_DIR = os.environ.get(
     "VOICE_PREVIEW_DIR",
     os.path.join(REPO_ROOT, "assets", "voice-previews"),
 )
-VOICE_PREVIEW_CACHE_VERSION = os.environ.get("QWEN_TTS_PREVIEW_CACHE_VERSION", "en-v2")
+# Must match Node `VOICE_PREVIEW_CACHE_VERSION` (server.ts).
+VOICE_PREVIEW_CACHE_VERSION = os.environ.get(
+    "QWEN_TTS_PREVIEW_CACHE_VERSION", "1.7b-br-v1"
+)
+
+# Qwen lang_code → Node voicePreviewCacheTag used in disk filenames.
+QWEN_LANG_TO_PREVIEW_TAG = {
+    "Auto": "auto",
+    "Portuguese": "pt-br",
+    "English": "en-us",
+    "Spanish": "es-es",
+    "French": "fr-fr",
+    "Italian": "it-it",
+    "German": "de-de",
+    "Japanese": "ja-jp",
+    "Korean": "ko-kr",
+    "Chinese": "zh-cn",
+    "Russian": "ru-ru",
+}
 
 SPEAKERS = {
     "vivian",
@@ -284,19 +307,55 @@ def is_cancelled(job_id: Optional[str]) -> bool:
     return bool(flag and flag.is_set())
 
 
-def preview_paths_for_voice(voice: str) -> tuple[str, str]:
+def preview_locale_tag(language: Optional[str] = None) -> Optional[str]:
+    """Map Qwen language name / BCP-47 to the Node preview filename tag."""
+    raw = (language or "").strip()
+    if not raw:
+        return None
+
+    mapped_lang = LANGUAGE_MAP.get(raw.lower().replace("_", "-"))
+    qwen_name = mapped_lang or (raw if raw[:1].isupper() else raw.title())
+    tag = QWEN_LANG_TO_PREVIEW_TAG.get(qwen_name)
+    if tag:
+        return tag
+
+    lowered = raw.lower().replace("_", "-")
+    if "-" in lowered or lowered in ("auto",):
+        return lowered
+
+    return None
+
+
+def preview_paths_for_voice(
+    voice: str,
+    language: Optional[str] = None,
+) -> tuple[str, str]:
+    """Resolve WAV+TXT paths. Prefer voice_locale_version (Node), then legacy voice_version."""
     safe = resolve_voice(voice).replace(" ", "_").lower()
-    wav = os.path.join(
-        VOICE_PREVIEW_DIR, f"{safe}_{VOICE_PREVIEW_CACHE_VERSION}.wav"
+    locale = preview_locale_tag(language)
+    keys: list[str] = []
+    if locale:
+        keys.append(f"{safe}_{locale}_{VOICE_PREVIEW_CACHE_VERSION}")
+    keys.append(f"{safe}_{VOICE_PREVIEW_CACHE_VERSION}")
+
+    for key in keys:
+        wav = os.path.join(VOICE_PREVIEW_DIR, f"{key}.wav")
+        txt = os.path.join(VOICE_PREVIEW_DIR, f"{key}.txt")
+        if os.path.isfile(wav) and os.path.isfile(txt):
+            return wav, txt
+
+    preferred = keys[0]
+    return (
+        os.path.join(VOICE_PREVIEW_DIR, f"{preferred}.wav"),
+        os.path.join(VOICE_PREVIEW_DIR, f"{preferred}.txt"),
     )
-    txt = os.path.join(
-        VOICE_PREVIEW_DIR, f"{safe}_{VOICE_PREVIEW_CACHE_VERSION}.txt"
-    )
-    return wav, txt
 
 
-def load_preview_anchor(voice: str) -> tuple[Optional[str], Optional[str]]:
-    wav_path, txt_path = preview_paths_for_voice(voice)
+def load_preview_anchor(
+    voice: str,
+    language: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    wav_path, txt_path = preview_paths_for_voice(voice, language)
     if not (os.path.isfile(wav_path) and os.path.isfile(txt_path)):
         return None, None
     try:
@@ -414,6 +473,10 @@ def synthesize(
     language: str,
     instruct: str,
     temperature: float,
+    top_k: int = DEFAULT_TOP_K,
+    top_p: float = DEFAULT_TOP_P,
+    repetition_penalty: float = DEFAULT_REPETITION_PENALTY,
+    max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     ref_audio_path: Optional[str] = None,
     ref_text: Optional[str] = None,
     skip_icl: bool = False,
@@ -428,7 +491,7 @@ def synthesize(
         ref_text = None
     else:
         if not ref_audio_path or not ref_text:
-            auto_wav, auto_txt = load_preview_anchor(voice)
+            auto_wav, auto_txt = load_preview_anchor(voice, language)
             if not ref_audio_path:
                 ref_audio_path = auto_wav
             if not ref_text:
@@ -439,18 +502,28 @@ def synthesize(
     )
     use_icl = bool(has_ref and not skip_icl and model_folder_present(BASE_MODEL_FOLDER))
 
+    sampling = dict(
+        do_sample=True,
+        temperature=temperature,
+        top_k=top_k,
+        top_p=top_p,
+        repetition_penalty=repetition_penalty,
+        max_new_tokens=max_new_tokens,
+    )
+
     if use_icl:
         ensure_model_loaded("base")
         assert base_model is not None
         print(
-            f"[qwen-tts] synthesize voice={voice} icl=True ref={ref_audio_path}"
+            f"[qwen-tts] synthesize voice={voice} icl=True ref={ref_audio_path} "
+            f"temp={temperature} top_k={top_k} top_p={top_p}"
         )
         wavs, sr = base_model.generate_voice_clone(
             text=text,
             language=language,
             ref_audio=ref_audio_path,
             ref_text=ref_text,
-            temperature=temperature,
+            **sampling,
         )
     else:
         if not skip_icl and not has_ref and model_folder_present(BASE_MODEL_FOLDER):
@@ -468,14 +541,15 @@ def synthesize(
         assert custom_model is not None
         speaker = speaker_api_name(voice)
         print(
-            f"[qwen-tts] synthesize voice={voice} speaker={speaker} icl=False"
+            f"[qwen-tts] synthesize voice={voice} speaker={speaker} icl=False "
+            f"temp={temperature} top_k={top_k} top_p={top_p}"
         )
         wavs, sr = custom_model.generate_custom_voice(
             text=text,
             language=language,
             speaker=speaker,
             instruct=instruct,
-            temperature=temperature,
+            **sampling,
         )
         use_icl = False
 
@@ -538,6 +612,10 @@ class TtsRequest(BaseModel):
     language: Optional[str] = None
     instruct: Optional[str] = None
     temperature: Optional[float] = None
+    topK: Optional[int] = None
+    topP: Optional[float] = None
+    repetitionPenalty: Optional[float] = None
+    maxTokens: Optional[int] = None
     refAudioPath: Optional[str] = None
     refText: Optional[str] = None
     skipIcl: Optional[bool] = False
@@ -561,6 +639,10 @@ def health():
         "sampleRate": model_sample_rate,
         "defaultVoice": DEFAULT_VOICE,
         "defaultTemperature": DEFAULT_TEMPERATURE,
+        "defaultTopK": DEFAULT_TOP_K,
+        "defaultTopP": DEFAULT_TOP_P,
+        "defaultRepetitionPenalty": DEFAULT_REPETITION_PENALTY,
+        "defaultMaxTokens": DEFAULT_MAX_NEW_TOKENS,
         "previewDir": VOICE_PREVIEW_DIR,
         "speakers": sorted(SPEAKERS),
         "device": DEVICE,
@@ -586,6 +668,30 @@ def tts(req: TtsRequest):
     if temperature > 1.5:
         temperature = 1.5
 
+    top_k = DEFAULT_TOP_K if req.topK is None else int(req.topK)
+    if top_k < 0:
+        top_k = 0
+
+    top_p = DEFAULT_TOP_P if req.topP is None else float(req.topP)
+    if top_p < 0:
+        top_p = 0.0
+    if top_p > 1.0:
+        top_p = 1.0
+
+    repetition_penalty = (
+        DEFAULT_REPETITION_PENALTY
+        if req.repetitionPenalty is None
+        else float(req.repetitionPenalty)
+    )
+    if repetition_penalty < 1.0:
+        repetition_penalty = 1.0
+
+    max_new_tokens = (
+        DEFAULT_MAX_NEW_TOKENS if req.maxTokens is None else int(req.maxTokens)
+    )
+    if max_new_tokens < 1:
+        max_new_tokens = 1
+
     ref_audio_path = (req.refAudioPath or "").strip() or None
     ref_text = (req.refText or "").strip() or None
     skip_icl = bool(req.skipIcl)
@@ -594,7 +700,7 @@ def tts(req: TtsRequest):
     print(
         f"[qwen-tts] /tts request voice={voice!r} (from {req.voice!r}) "
         f"skipIcl={skip_icl} refAudioPath={ref_audio_path or '-'} "
-        f"jobId={job_id or '-'}"
+        f"jobId={job_id or '-'} temp={temperature}"
     )
 
     if job_id:
@@ -639,6 +745,10 @@ def tts(req: TtsRequest):
                 language,
                 instruct,
                 temperature,
+                top_k=top_k,
+                top_p=top_p,
+                repetition_penalty=repetition_penalty,
+                max_new_tokens=max_new_tokens,
                 ref_audio_path=ref_audio_path,
                 ref_text=ref_text,
                 skip_icl=skip_icl,

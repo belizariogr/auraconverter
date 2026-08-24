@@ -32,7 +32,14 @@ import {
   writeKokoroBackend,
   type TtsEngineId,
 } from "./ttsEngine";
-import { languagePayloadForTts } from "./narrationLanguage";
+import {
+  languagePayloadForTts,
+  mergeQwenInstruct,
+  previewTextForLanguage,
+  resolveNarrationLanguageId,
+  voicePreviewCacheTag,
+  type NarrationLanguageId,
+} from "./narrationLanguage";
 import {
   convertImageToJpeg,
   coverToBase64Jpeg,
@@ -111,9 +118,12 @@ const TTS_TIMEOUT_MS = Number(process.env.TTS_TIMEOUT_MS ?? process.env.DIA_TTS_
 const TTS_INSTRUCT =
   process.env.QWEN_TTS_INSTRUCT ||
   "Speak as a consistent, calm, neutral book narrator. Keep the same pitch, energy, emotion, and pace for every sentence. Do not sound excited, dramatic, whispery, or casual.";
-/** Low temperature keeps tone stable across chunks; 0 (greedy) truncates some voices. Override with QWEN_TTS_TEMPERATURE. */
-const TTS_TEMPERATURE = Number(process.env.QWEN_TTS_TEMPERATURE ?? "0.3");
+/** Qwen3-TTS official / mlx-audio default sampling temperature. Override with QWEN_TTS_TEMPERATURE. */
+const TTS_TEMPERATURE = Number(process.env.QWEN_TTS_TEMPERATURE ?? "0.9");
 const TTS_LANGUAGE = process.env.QWEN_TTS_LANGUAGE || "Auto";
+/** Bump when preview text, instruct, or ICL scheme changes so old disk samples and chunk caches are ignored. */
+const VOICE_PREVIEW_CACHE_VERSION =
+  process.env.QWEN_TTS_PREVIEW_CACHE_VERSION || "1.7b-br-v1";
 
 let ttsChild: ChildProcess | null = null;
 let ttsStartPromise: Promise<void> | null = null;
@@ -170,12 +180,15 @@ function activeTtsEngine(): TtsEngineId {
   return readTtsEngine(AURA_DATA_DIR);
 }
 
-function resolveNarrationLanguagePayload(raw: unknown): string {
+function resolveNarrationLanguageIdFromRequest(raw: unknown): NarrationLanguageId {
   const requested = typeof raw === "string" ? raw.trim() : "";
-  const languageId = requested || TTS_LANGUAGE;
 
+  return resolveNarrationLanguageId(requested || TTS_LANGUAGE);
+}
+
+function resolveNarrationLanguagePayload(raw: unknown): string {
   return languagePayloadForTts(
-    languageId,
+    resolveNarrationLanguageIdFromRequest(raw),
     activeTtsEngine(),
     readKokoroBackend(AURA_DATA_DIR)
   );
@@ -342,6 +355,7 @@ function resolveQwenLaunch(): {
     QWEN_TTS_PORT: String(TTS_PORT),
     TTS_PORT: String(TTS_PORT),
     QWEN_TTS_PRELOAD: process.env.QWEN_TTS_PRELOAD ?? "0",
+    QWEN_TTS_PREVIEW_CACHE_VERSION: VOICE_PREVIEW_CACHE_VERSION,
     VOICE_PREVIEW_DIR: previewDir,
     QWEN_TTS_MODELS_DIR: modelsDir,
     ...(accel === "rocm" ? rocmSpawnEnv() : {}),
@@ -962,6 +976,7 @@ async function synthesizeWithTts(
     refText?: string;
     skipIcl?: boolean;
     language?: string;
+    instruct?: string;
   }
 ): Promise<{ pcm: Buffer; sampleRate: number; cancelled: boolean; icl?: boolean }> {
   if (signal?.aborted) {
@@ -977,7 +992,7 @@ async function synthesizeWithTts(
       text,
       voice,
       jobId,
-      instruct: TTS_INSTRUCT,
+      instruct: (opts?.instruct || "").trim() || TTS_INSTRUCT,
       temperature: TTS_TEMPERATURE,
       language: opts?.language?.trim() || TTS_LANGUAGE,
       ...(opts?.refAudioPath && opts?.refText
@@ -1370,7 +1385,7 @@ async function extractDocumentText(options: {
 const PARAS_PER_CHUNK = 5;
 const MIN_PARAGRAPH_WORDS = 20;
 /**
- * Qwen 0.6B + M5 NAX drop the middle of long prompts (mlx-audio#464).
+ * Qwen + M5 NAX can drop the middle of long prompts (mlx-audio#464).
  * Keep each generate() to ~one short paragraph. Kokoro still uses 5 paras.
  */
 const QWEN_MAX_CHUNK_CHARS = 280;
@@ -1393,7 +1408,7 @@ function shouldAttachToPrevious(text: string, prev: string): boolean {
 /**
  * Keep short lines / dialogue in the same TTS prompt as nearby text so the model
  * has speaker context, then emit every 5 remaining paragraphs as one chunk.
- * Qwen additionally splits oversized packs so 0.6B does not drop the middle.
+ * Qwen additionally splits oversized packs so long prompts do not drop the middle.
  */
 function splitOversizedChunk(text: string, maxChars: number): string[] {
   const trailingNewlines = text.match(/\n+$/)?.[0] ?? "";
@@ -1642,7 +1657,10 @@ function narrationFingerprint(
   language: string
 ): string {
   return createHash("sha256")
-    .update(`${engine}\n${voice}\n${language}\n${text}`)
+    .update(
+      `${engine}\n${voice}\n${language}\n${VOICE_PREVIEW_CACHE_VERSION}\n` +
+        `t=${TTS_TEMPERATURE}\n${text}`
+    )
     .digest("hex")
     .slice(0, 40);
 }
@@ -1782,28 +1800,28 @@ async function cleanupNarrationArtifact(id: string) {
   if (art.coverPath) await fs.promises.unlink(art.coverPath).catch(() => undefined);
 }
 
-const VOICE_PREVIEW_TEXT =
-  process.env.QWEN_TTS_PREVIEW_TEXT ||
-  "Hello. This is a preview of my voice, reading in a calm and clear tone.";
-/** Bump when preview text or TTS settings change so old disk samples are ignored. */
-const VOICE_PREVIEW_CACHE_VERSION = process.env.QWEN_TTS_PREVIEW_CACHE_VERSION || "en-v2";
 /** WAV + transcript used as voice-reference (ref_audio / ref_text for ICL). */
 const VOICE_PREVIEW_DIR = path.join(AURA_ROOT, "assets", "voice-previews");
-/** In-memory WAV previews (base64) layered on disk cache. */
+/** In-memory WAV previews (base64) layered on disk cache. Key: voice+locale. */
 const voicePreviewCache = new Map<string, string>();
 
 function voicePreviewSafeKey(voiceKey: string): string {
   return voiceKey.replace(/[^a-z0-9_-]/gi, "_").toLowerCase();
 }
 
-function voicePreviewWavPath(voiceKey: string): string {
-  const safe = voicePreviewSafeKey(voiceKey);
-  return path.join(VOICE_PREVIEW_DIR, `${safe}_${VOICE_PREVIEW_CACHE_VERSION}.wav`);
+function voicePreviewFileKey(voiceName: string, languageId: string): string {
+  const voice = voicePreviewSafeKey(voiceName);
+  const lang = voicePreviewSafeKey(voicePreviewCacheTag(languageId));
+
+  return `${voice}_${lang}_${VOICE_PREVIEW_CACHE_VERSION}`;
 }
 
-function voicePreviewTextPath(voiceKey: string): string {
-  const safe = voicePreviewSafeKey(voiceKey);
-  return path.join(VOICE_PREVIEW_DIR, `${safe}_${VOICE_PREVIEW_CACHE_VERSION}.txt`);
+function voicePreviewWavPath(fileKey: string): string {
+  return path.join(VOICE_PREVIEW_DIR, `${fileKey}.wav`);
+}
+
+function voicePreviewTextPath(fileKey: string): string {
+  return path.join(VOICE_PREVIEW_DIR, `${fileKey}.txt`);
 }
 
 /** Drop trailing near-silence so truncated/greedy generations don't pad the preview. */
@@ -1813,8 +1831,14 @@ function trimTrailingSilence(samples: Int16Array, sampleRate = 24000): Int16Arra
   let last = samples.length - 1;
   while (last > 0 && Math.abs(samples[last]) <= threshold) last--;
   const end = Math.min(samples.length, last + 1 + padSamples);
-  if (end >= samples.length) return samples;
-  if (end < sampleRate * 0.4) return samples; // don't trim near-empty clips
+  if (end >= samples.length) {
+    return samples;
+  }
+
+  if (end < sampleRate * 0.4) {
+    return samples;
+  }
+
   return samples.subarray(0, end);
 }
 
@@ -1844,64 +1868,115 @@ function encodePcmToWav(samples: Int16Array, sampleRate = 24000): Buffer {
   return buffer;
 }
 
-async function loadVoicePreviewFromDisk(voiceKey: string): Promise<string | null> {
-  const filePath = voicePreviewWavPath(voiceKey);
+async function loadVoicePreviewFromDisk(fileKey: string): Promise<string | null> {
+  const filePath = voicePreviewWavPath(fileKey);
   try {
     const buf = await fs.promises.readFile(filePath);
-    if (buf.length > 0) return buf.toString("base64");
+    if (buf.length > 0) {
+      return buf.toString("base64");
+    }
   } catch {
     // miss
   }
+
   return null;
 }
 
 async function saveVoicePreviewToDisk(
-  voiceKey: string,
+  fileKey: string,
   wav: Buffer,
   transcript: string
 ): Promise<void> {
   await fs.promises.mkdir(VOICE_PREVIEW_DIR, { recursive: true });
-  const wavPath = voicePreviewWavPath(voiceKey);
+  const wavPath = voicePreviewWavPath(fileKey);
   await fs.promises.writeFile(wavPath, wav);
   // Transcript must match the WAV for ICL voice reference (ref_text).
-  await fs.promises.writeFile(voicePreviewTextPath(voiceKey), `${transcript.trim()}\n`, "utf8");
+  await fs.promises.writeFile(voicePreviewTextPath(fileKey), `${transcript.trim()}\n`, "utf8");
   console.log(
     `[VoicePreview] Áudio salvo: nome="${path.basename(wavPath)}" caminho="${path.resolve(wavPath)}"`
   );
 }
 
+/** Remove disk WAV+TXT and in-memory preview for one voice+locale. */
+async function deleteVoicePreviewFiles(
+  voiceName: string,
+  languageId: string
+): Promise<{ deleted: boolean; fileKey: string }> {
+  const fileKey = voicePreviewFileKey(voiceName, languageId);
+  voicePreviewCache.delete(fileKey);
+
+  let deleted = false;
+  for (const filePath of [voicePreviewWavPath(fileKey), voicePreviewTextPath(fileKey)]) {
+    try {
+      await fs.promises.unlink(filePath);
+      deleted = true;
+      console.log(`[VoicePreview] Removido: ${path.basename(filePath)}`);
+    } catch {
+      // miss
+    }
+  }
+
+  return { deleted, fileKey };
+}
+
 /**
  * Ensure a disk WAV+TXT voice anchor exists for ICL narration.
- * Reuses assets/voice-previews; synthesizes once with skipIcl if missing.
+ * One sample per speaker+locale; skipIcl generate uses that locale's preview text.
  */
 async function ensureVoicePreview(
-  voiceName: string
+  voiceName: string,
+  languageId: string
 ): Promise<{ refAudioPath: string; refText: string; created: boolean }> {
-  const cacheKey = voiceName.toLowerCase();
-  const wavPath = voicePreviewWavPath(cacheKey);
-  const txtPath = voicePreviewTextPath(cacheKey);
+  const language = resolveNarrationLanguageId(languageId);
+  const previewText = previewTextForLanguage(language);
+  const ttsLanguage = languagePayloadForTts(
+    language,
+    activeTtsEngine(),
+    readKokoroBackend(AURA_DATA_DIR)
+  );
+  const fileKey = voicePreviewFileKey(voiceName, language);
+  const wavPath = voicePreviewWavPath(fileKey);
+  const txtPath = voicePreviewTextPath(fileKey);
 
   try {
     await fs.promises.access(wavPath, fs.constants.R_OK);
     await fs.promises.access(txtPath, fs.constants.R_OK);
     const fromDisk = (await fs.promises.readFile(txtPath, "utf8")).trim();
-    const refText = fromDisk || VOICE_PREVIEW_TEXT;
-    const wavBuf = await fs.promises.readFile(wavPath);
-    if (wavBuf.length > 0) {
-      voicePreviewCache.set(cacheKey, wavBuf.toString("base64"));
-      return { refAudioPath: wavPath, refText, created: false };
+    // Stale transcript (preview copy changed without a version bump) → regenerate.
+    if (fromDisk && fromDisk !== previewText.trim()) {
+      console.log(
+        `[VoicePreview] Transcript mismatch for ${fileKey}; regenerating ICL anchor.`
+      );
+    } else {
+      const refText = fromDisk || previewText;
+      const wavBuf = await fs.promises.readFile(wavPath);
+
+      if (wavBuf.length > 0) {
+        voicePreviewCache.set(fileKey, wavBuf.toString("base64"));
+        console.log(
+          `[VoicePreview] Using locale anchor: ${path.basename(wavPath)} (lang=${language})`
+        );
+
+        return { refAudioPath: wavPath, refText, created: false };
+      }
     }
   } catch {
     // miss — generate below
   }
 
-  console.log(`[VoicePreview] Generating ICL anchor for ${voiceName}...`);
+  console.log(
+    `[VoicePreview] Generating ICL anchor for ${voiceName} (${language})...`
+  );
   const { pcm, sampleRate, cancelled } = await synthesizeWithTts(
-    VOICE_PREVIEW_TEXT,
+    previewText,
     voiceName,
     undefined,
     undefined,
-    { skipIcl: true }
+    {
+      skipIcl: true,
+      language: ttsLanguage,
+      instruct: mergeQwenInstruct(language, TTS_INSTRUCT),
+    }
   );
   if (cancelled || pcm.length === 0) {
     throw new Error(
@@ -1915,11 +1990,12 @@ async function ensureVoicePreview(
     sampleRate
   );
   const wavBuffer = encodePcmToWav(samples, sampleRate);
-  voicePreviewCache.set(cacheKey, wavBuffer.toString("base64"));
-  await saveVoicePreviewToDisk(cacheKey, wavBuffer, VOICE_PREVIEW_TEXT);
+  voicePreviewCache.set(fileKey, wavBuffer.toString("base64"));
+  await saveVoicePreviewToDisk(fileKey, wavBuffer, previewText);
+
   return {
     refAudioPath: wavPath,
-    refText: VOICE_PREVIEW_TEXT,
+    refText: previewText,
     created: true,
   };
 }
@@ -1929,37 +2005,46 @@ app.post("/api/voice-preview", async (req, res) => {
   let didGenerate = false;
   try {
     const engine = activeTtsEngine();
+    const languageId = resolveNarrationLanguageIdFromRequest(req.body?.language);
+    const previewText = previewTextForLanguage(languageId);
+    const ttsLanguage = languagePayloadForTts(
+      languageId,
+      engine,
+      readKokoroBackend(AURA_DATA_DIR)
+    );
     const voiceName =
       String(req.body?.voiceName || "").trim() ||
       (engine === "kokoro" ? "af_heart" : "Vivian");
+    const fileKey = voicePreviewFileKey(voiceName, languageId);
 
-    const cacheKey = voiceName.toLowerCase();
-
-    const memCached = voicePreviewCache.get(cacheKey);
+    const memCached = voicePreviewCache.get(fileKey);
     if (memCached) {
       return res.json({
         audioData: memCached,
         mimeType: "audio/wav",
         voiceName,
+        language: languageId,
         cached: true,
         source: "memory",
-        filePath: voicePreviewWavPath(cacheKey),
-        textPath: voicePreviewTextPath(cacheKey),
+        filePath: voicePreviewWavPath(fileKey),
+        textPath: voicePreviewTextPath(fileKey),
         engine,
       });
     }
 
-    const diskCached = await loadVoicePreviewFromDisk(cacheKey);
+    const diskCached = await loadVoicePreviewFromDisk(fileKey);
     if (diskCached) {
-      voicePreviewCache.set(cacheKey, diskCached);
+      voicePreviewCache.set(fileKey, diskCached);
+
       return res.json({
         audioData: diskCached,
         mimeType: "audio/wav",
         voiceName,
+        language: languageId,
         cached: true,
         source: "disk",
-        filePath: voicePreviewWavPath(cacheKey),
-        textPath: voicePreviewTextPath(cacheKey),
+        filePath: voicePreviewWavPath(fileKey),
+        textPath: voicePreviewTextPath(fileKey),
         engine,
       });
     }
@@ -1968,56 +2053,61 @@ app.post("/api/voice-preview", async (req, res) => {
     // saved WAV is just a reusable preview rather than a voice-clone anchor).
     if (engine === "kokoro") {
       const { pcm, sampleRate } = await synthesizeWithTts(
-        VOICE_PREVIEW_TEXT,
+        previewText,
         voiceName,
         undefined,
         undefined,
-        { skipIcl: true }
+        { skipIcl: true, language: ttsLanguage, instruct: mergeQwenInstruct(languageId, TTS_INSTRUCT) }
       );
       didGenerate = true;
       if (pcm.length === 0) {
         throw new Error("Prévia Kokoro vazia.");
       }
+
       const samples = trimTrailingSilence(
         new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 2)),
         sampleRate
       );
       const wavBuffer = encodePcmToWav(samples, sampleRate);
       const audioData = wavBuffer.toString("base64");
-      voicePreviewCache.set(cacheKey, audioData);
-      await saveVoicePreviewToDisk(cacheKey, wavBuffer, VOICE_PREVIEW_TEXT);
+      voicePreviewCache.set(fileKey, audioData);
+      await saveVoicePreviewToDisk(fileKey, wavBuffer, previewText);
+
       return res.json({
         audioData,
         mimeType: "audio/wav",
         voiceName,
+        language: languageId,
         cached: false,
         source: "generated",
-        filePath: voicePreviewWavPath(cacheKey),
-        textPath: voicePreviewTextPath(cacheKey),
+        filePath: voicePreviewWavPath(fileKey),
+        textPath: voicePreviewTextPath(fileKey),
         engine,
       });
     }
 
-    const anchor = await ensureVoicePreview(voiceName);
+    const anchor = await ensureVoicePreview(voiceName, languageId);
     didGenerate = anchor.created;
     const audioData =
-      voicePreviewCache.get(cacheKey) ||
+      voicePreviewCache.get(fileKey) ||
       (await fs.promises.readFile(anchor.refAudioPath)).toString("base64");
-    voicePreviewCache.set(cacheKey, audioData);
+    voicePreviewCache.set(fileKey, audioData);
 
     return res.json({
       audioData,
       mimeType: "audio/wav",
       voiceName,
+      language: languageId,
       cached: false,
       source: "generated",
       filePath: anchor.refAudioPath,
-      textPath: voicePreviewTextPath(cacheKey),
+      textPath: voicePreviewTextPath(fileKey),
       engine,
     });
   } catch (err: any) {
     console.error("[VoicePreview]", err?.message || err);
     didGenerate = true;
+
     return res.status(500).json({
       error: err?.message || "Falha ao gerar prévia de voz.",
     });
@@ -2025,6 +2115,32 @@ app.post("/api/voice-preview", async (req, res) => {
     if (didGenerate) {
       await unloadTtsModel();
     }
+
+  }
+});
+
+app.delete("/api/voice-preview", async (req, res) => {
+  try {
+    const languageId = resolveNarrationLanguageIdFromRequest(req.body?.language);
+    const voiceName = String(req.body?.voiceName || "").trim();
+
+    if (!voiceName) {
+      return res.status(400).json({ error: "O nome da voz é obrigatório." });
+    }
+
+    const { deleted, fileKey } = await deleteVoicePreviewFiles(voiceName, languageId);
+
+    return res.json({
+      voiceName,
+      language: languageId,
+      deleted,
+      fileKey,
+      engine: activeTtsEngine(),
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Falha ao excluir prévia de voz.";
+
+    return res.status(500).json({ error: message });
   }
 });
 
@@ -2668,6 +2784,7 @@ app.post("/api/narrate-stream", async (req, res) => {
     const type = (fileType || "pdf") as "pdf" | "epub";
     const voice = voiceName || "Vivian";
     const engine = activeTtsEngine();
+    const languageId = resolveNarrationLanguageIdFromRequest(reqLanguage);
     const ttsLanguage = resolveNarrationLanguagePayload(reqLanguage);
     const outputFormat: "mp3" | "m4b" =
       reqOutputFormat === "m4b" ? "m4b" : "mp3";
@@ -2794,7 +2911,7 @@ app.post("/api/narrate-stream", async (req, res) => {
         message: "Preparando âncora de voz (prévia) para tom consistente...",
       });
       try {
-        voiceAnchor = await ensureVoicePreview(voice);
+        voiceAnchor = await ensureVoicePreview(voice, languageId);
         console.log(`[NarrateStream] Voice anchor: ${voiceAnchor.refAudioPath}`);
       } catch (anchorErr: any) {
         sendEvent({
@@ -2911,8 +3028,13 @@ app.post("/api/narrate-stream", async (req, res) => {
                   refAudioPath: voiceAnchor.refAudioPath,
                   refText: voiceAnchor.refText,
                   language: ttsLanguage,
+                  instruct: mergeQwenInstruct(languageId, TTS_INSTRUCT),
                 }
-              : { skipIcl: true, language: ttsLanguage }
+              : {
+                  skipIcl: true,
+                  language: ttsLanguage,
+                  instruct: mergeQwenInstruct(languageId, TTS_INSTRUCT),
+                }
           );
           pcm = result.pcm;
           sampleRate = result.sampleRate;
@@ -3195,6 +3317,7 @@ app.post("/api/narrate", async (req, res) => {
 
     const { start, end } = parsePageRange(startPage, endPage);
     const voice = voiceName || "Vivian";
+    const languageId = resolveNarrationLanguageIdFromRequest(reqLanguage);
     const ttsLanguage = resolveNarrationLanguagePayload(reqLanguage);
 
     console.log(
@@ -3212,8 +3335,9 @@ app.post("/api/narrate", async (req, res) => {
     const textChunks = splitTextIntoChunks(extractedText, engine);
     let voiceAnchor: { refAudioPath: string; refText: string } | null = null;
     if (engine === "qwen3") {
-      voiceAnchor = await ensureVoicePreview(voice);
+      voiceAnchor = await ensureVoicePreview(voice, languageId);
     }
+
     ensureNarrationTmpDir();
     const audioId = newNarrationId();
     const pcmPath = path.join(NARRATION_TMP_DIR, `${audioId}.pcm`);
@@ -3246,8 +3370,13 @@ app.post("/api/narrate", async (req, res) => {
                 refAudioPath: voiceAnchor.refAudioPath,
                 refText: voiceAnchor.refText,
                 language: ttsLanguage,
+                instruct: mergeQwenInstruct(languageId, TTS_INSTRUCT),
               }
-            : { skipIcl: true, language: ttsLanguage }
+            : {
+                skipIcl: true,
+                language: ttsLanguage,
+                instruct: mergeQwenInstruct(languageId, TTS_INSTRUCT),
+              }
         );
         sampleRate = sr;
         if (pcm.length > 0) {

@@ -156,12 +156,16 @@ When the user requests a durable behavior change, record it here or in the relev
 
 - UI copy and API errors in **pt-BR**; code identifiers in English
 - M4B must embed **one** cover: the OPF `cover-image` / largest cover-like JPEG — never every EPUB illustration (Books/QuickTime treat extra JPEGs as video)
-- Encode AAC/MP3 at native TTS rate when possible; do not upsample 24 kHz → 48 kHz with a harsh `aresample` cutoff
-- Apple M5: mlx-audio `mx.clear_cache()` must not run mid-`generate()`. Pin mlx ≥ 0.32.1 (0.30.3 drops mid-utterance Qwen audio). Do **not** force `MLX_ENABLE_TF32=0`.
+- Encode AAC/MP3 at native TTS sample rate; no aresample upsample, loudness, or EQ filters on encode
+- Qwen3-TTS sampling defaults match official / mlx-audio: `temperature=0.9`, `top_k=50`, `top_p=1.0`, `repetition_penalty=1.05`, `max_tokens=2048` (override via `QWEN_TTS_*` env). Do not use low temperature (e.g. 0.3) — it degenerates codec tokens into silence/beeps/dropouts
+- Apple M5: mlx-audio `mx.clear_cache()` must not run mid-`generate()`. Pin mlx / mlx-metal ≥ 0.32.1 and mlx-audio ≥ 0.5.0 (0.30.3 drops mid-utterance Qwen audio). Do **not** force `MLX_ENABLE_TF32=0`.
 - Qwen TTS: never insert `<break>` tags in extracted or editable text — use `\n\n\n` instead. Kokoro still uses `<break>` as silent PCM.
 - Chunk PCM cache under Application Support is kept after encode unless the user asks to delete it
 - Do not commit secrets (`.env`, credentials)
 - Per-book `narrationLanguage` (BCP-47 or `auto`): default is the OS locale; persist with document state; send to Qwen (`lang_code` names) and Kokoro (MLX letter / ONNX `en-us` style) via `/tts` `language`
+- Qwen `pt-BR`: steer Brazilian accent via strong `qwenInstruct` + BR lexical preview/ICL text (`você`/`celular`/`ônibus`); bump `QWEN_TTS_PREVIEW_CACHE_VERSION` (current default `1.7b-br-v1`) when preview copy or model size changes so old anchors are regenerated. ICL narration ignores `instruct` — accent lives in the preview WAV.
+- Qwen MLX default models: **1.7B 8-bit** Base + CustomVoice (`mlx-community/Qwen3-TTS-12Hz-1.7B-*-8bit`). Torch: `Qwen/Qwen3-TTS-12Hz-1.7B-*`.
+- Qwen previews: CustomVoice generates each speaker preset; Base ICL clones that WAV at narration time — both models should be installed
 - A line/paragraph of only digits and spaces (`42`, `1 0`, `1 3`), with optional wrappers `()` `[]`, is a printed page number: drop it (PDF: first/last line of the page) and insert `\n\n\n` (`PAGE_NUMBER_GAP`). Do not collapse that gap in sanitize, Qwen `\n{4,}` capping, or the OCR-repair model. Letters keep the line.
 
 ## Child DOX Index

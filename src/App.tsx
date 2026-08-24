@@ -473,6 +473,9 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
 
   const completedDocs = documents.filter((d) => d.audioUrl);
   const activeDoc = documents.find((d) => d.id === activeDocId) ?? documents[0] ?? null;
+  const previewLanguageId =
+    activeDoc?.narrationLanguage ?? detectSystemNarrationLanguage();
+  const previewLanguage = getNarrationLanguage(previewLanguageId);
   const reviewDoc = documents.find((d) => d.id === reviewDocId) ?? documents[0] ?? null;
   const resultDoc =
     documents.find((d) => d.id === resultDocId) ?? completedDocs[0] ?? null;
@@ -718,10 +721,12 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
 
   // Voice preview samples
   const [previewLoadingVoice, setPreviewLoadingVoice] = useState<string | null>(null);
+  const [previewDeletingVoice, setPreviewDeletingVoice] = useState<string | null>(null);
   const [previewPlayingVoice, setPreviewPlayingVoice] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const previewCacheRef = useRef<Record<string, string>>({});
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewRequestIdRef = useRef(0);
 
   // Persist voice selection
   useEffect(() => {
@@ -739,6 +744,7 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
         previewAudioRef.current.pause();
         previewAudioRef.current = null;
       }
+
       for (const url of Object.values(previewCacheRef.current) as string[]) {
         URL.revokeObjectURL(url);
       }
@@ -1500,46 +1506,69 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
       previewAudioRef.current.onerror = null;
       previewAudioRef.current = null;
     }
+
     setPreviewPlayingVoice(null);
   };
 
-  const playVoicePreview = async (voiceId: string) => {
+  useEffect(() => {
+    previewRequestIdRef.current += 1;
+    stopVoicePreview();
+  }, [previewLanguageId]);
+
+  const playVoicePreview = async (
+    voiceId: string,
+    opts?: { forceRegenerate?: boolean }
+  ) => {
     setPreviewError(null);
 
-    if (previewPlayingVoice === voiceId) {
+    if (previewPlayingVoice === voiceId && !opts?.forceRegenerate) {
       stopVoicePreview();
+
       return;
     }
 
     stopVoicePreview();
 
-    let url = previewCacheRef.current[voiceId];
+    const cacheKey = `${voiceId}::${previewLanguageId}`;
+    const requestId = ++previewRequestIdRef.current;
+    let url = opts?.forceRegenerate ? undefined : previewCacheRef.current[cacheKey];
     if (!url) {
       setPreviewLoadingVoice(voiceId);
       try {
         const response = await fetch("/api/voice-preview", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ voiceName: voiceId }),
+          body: JSON.stringify({ voiceName: voiceId, language: previewLanguageId }),
         });
         const payload = await response.json();
         if (!response.ok) {
           throw new Error(payload.error || "Falha ao gerar prévia da voz.");
         }
+
         const binary = atob(payload.audioData as string);
         const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+
         const blob = new Blob([bytes], { type: payload.mimeType || "audio/mpeg" });
         url = URL.createObjectURL(blob);
-        previewCacheRef.current[voiceId] = url;
-      } catch (err: any) {
+        previewCacheRef.current[cacheKey] = url;
+      } catch (err: unknown) {
         console.error(err);
-        setPreviewError(err.message || "Não foi possível ouvir esta voz agora.");
+        setPreviewError(
+          err instanceof Error ? err.message : "Não foi possível ouvir esta voz agora."
+        );
         setPreviewLoadingVoice(null);
+
         return;
       } finally {
         setPreviewLoadingVoice((current) => (current === voiceId ? null : current));
       }
+    }
+
+    if (requestId !== previewRequestIdRef.current) {
+      return;
     }
 
     const audio = new Audio(url);
@@ -1557,9 +1586,46 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
     };
     try {
       await audio.play();
-    } catch (err: any) {
-      setPreviewError(err?.message || "Não foi possível reproduzir o áudio.");
+    } catch (err: unknown) {
+      setPreviewError(
+        err instanceof Error ? err.message : "Não foi possível reproduzir o áudio."
+      );
       stopVoicePreview();
+    }
+  };
+
+  const deleteAndRegenerateVoicePreview = async (voiceId: string) => {
+    setPreviewError(null);
+    stopVoicePreview();
+
+    const cacheKey = `${voiceId}::${previewLanguageId}`;
+    setPreviewDeletingVoice(voiceId);
+
+    try {
+      const response = await fetch("/api/voice-preview", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ voiceName: voiceId, language: previewLanguageId }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "Falha ao excluir a prévia da voz.");
+      }
+
+      const oldUrl = previewCacheRef.current[cacheKey];
+      if (oldUrl) {
+        URL.revokeObjectURL(oldUrl);
+        delete previewCacheRef.current[cacheKey];
+      }
+
+      await playVoicePreview(voiceId, { forceRegenerate: true });
+    } catch (err: unknown) {
+      console.error(err);
+      setPreviewError(
+        err instanceof Error ? err.message : "Não foi possível regenerar a prévia."
+      );
+    } finally {
+      setPreviewDeletingVoice((current) => (current === voiceId ? null : current));
     }
   };
 
@@ -2909,8 +2975,8 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
                     {ttsEngine === "kokoro"
                       ? `Kokoro (${kokoroBackend === "mlx" ? "MLX" : "ONNX fp32"} · ${
                           kokoroDevice === "gpu" ? "GPU" : "CPU"
-                        }). Escolha a voz neural para a narração.`
-                      : "Motor Qwen3. A prévia em cache mantém o mesmo tom em toda a narração."}
+                        }). A prévia fala no idioma do livro (${previewLanguage.label}). Passe o mouse na voz e use ↺ para excluir a prévia salva e gerar outra.`
+                      : `Motor Qwen3. A prévia em ${previewLanguage.label} vira a referência de voz da narração. Passe o mouse na voz e use ↺ para excluir a prévia salva e gerar outra.`}
                   </p>
 
                   {previewError && (
@@ -2936,7 +3002,13 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
                             {genderVoices.map((voice) => {
                               const isSelected = selectedVoice === voice.id;
                               const isLoadingPreview = previewLoadingVoice === voice.id;
+                              const isDeletingPreview = previewDeletingVoice === voice.id;
                               const isPlayingPreview = previewPlayingVoice === voice.id;
+                              const previewBusy =
+                                isLoadingPreview ||
+                                isDeletingPreview ||
+                                (!!previewLoadingVoice && previewLoadingVoice !== voice.id) ||
+                                (!!previewDeletingVoice && previewDeletingVoice !== voice.id);
                               return (
                                 <div
                                   key={voice.id}
@@ -2968,29 +3040,66 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
                                       {voice.description}
                                     </span>
                                   </div>
-                                  <button
-                                    type="button"
-                                    title={isPlayingPreview ? "Parar prévia" : `Ouvir ${voice.name}`}
-                                    aria-label={isPlayingPreview ? "Parar prévia" : `Ouvir exemplo de ${voice.name}`}
-                                    disabled={isLoadingPreview || (!!previewLoadingVoice && !isLoadingPreview)}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      void playVoicePreview(voice.id);
-                                    }}
-                                    className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 border transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${
-                                      isPlayingPreview
-                                        ? "bg-blue-500/20 border-blue-400/40 text-blue-300"
-                                        : "bg-transparent border-transparent text-slate-500 opacity-70 group-hover:opacity-100 group-hover:bg-white/5 group-hover:border-white/10 hover:text-white"
-                                    }`}
-                                  >
-                                    {isLoadingPreview ? (
-                                      <Loader2 className="w-3 h-3 animate-spin" />
-                                    ) : isPlayingPreview ? (
-                                      <Square className="w-2.5 h-2.5 fill-current" />
-                                    ) : (
-                                      <Play className="w-3 h-3 fill-current" />
-                                    )}
-                                  </button>
+                                  <div className="flex items-center gap-0.5 shrink-0">
+                                    <button
+                                      type="button"
+                                      title={
+                                        isDeletingPreview
+                                          ? "Regenerando prévia..."
+                                          : `Excluir prévia salva de ${voice.name} e gerar outra`
+                                      }
+                                      aria-label={
+                                        isDeletingPreview
+                                          ? "Regenerando prévia"
+                                          : `Excluir e regenerar prévia de ${voice.name}`
+                                      }
+                                      disabled={previewBusy}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        void deleteAndRegenerateVoicePreview(voice.id);
+                                      }}
+                                      className={`w-7 h-7 rounded-lg flex items-center justify-center border transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer bg-transparent border-transparent text-slate-500 hover:!opacity-100 group-hover:bg-white/5 group-hover:border-white/10 hover:text-rose-300 ${
+                                        isSelected ? "opacity-70" : "opacity-0 group-hover:opacity-70"
+                                      }`}
+                                    >
+                                      {isDeletingPreview ? (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      ) : (
+                                        <RotateCcw className="w-3 h-3" />
+                                      )}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      title={
+                                        isPlayingPreview
+                                          ? "Parar prévia"
+                                          : `Ouvir ${voice.name} em ${previewLanguage.label}`
+                                      }
+                                      aria-label={
+                                        isPlayingPreview
+                                          ? "Parar prévia"
+                                          : `Ouvir exemplo de ${voice.name} em ${previewLanguage.label}`
+                                      }
+                                      disabled={previewBusy}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        void playVoicePreview(voice.id);
+                                      }}
+                                      className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 border transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${
+                                        isPlayingPreview
+                                          ? "bg-blue-500/20 border-blue-400/40 text-blue-300"
+                                          : "bg-transparent border-transparent text-slate-500 opacity-70 group-hover:opacity-100 group-hover:bg-white/5 group-hover:border-white/10 hover:text-white"
+                                      }`}
+                                    >
+                                      {isLoadingPreview ? (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      ) : isPlayingPreview ? (
+                                        <Square className="w-2.5 h-2.5 fill-current" />
+                                      ) : (
+                                        <Play className="w-3 h-3 fill-current" />
+                                      )}
+                                    </button>
+                                  </div>
                                 </div>
                               );
                             })}

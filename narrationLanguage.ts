@@ -34,6 +34,13 @@ export interface NarrationLanguage {
   kokoroOnnx: string;
   /** False when Kokoro has no dedicated G2P for this locale. */
   kokoroNative: boolean;
+  /** Spoken sample for UI preview and Qwen ICL ref_text. */
+  previewText: string;
+  /**
+   * Extra Qwen `instruct` (accent / dialect). Appended to the narrator prompt.
+   * Empty when the locale has no extra steering.
+   */
+  qwenInstruct: string;
 }
 
 export const NARRATION_LANGUAGES: NarrationLanguage[] = [
@@ -45,6 +52,11 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroMlx: "a",
     kokoroOnnx: "en-us",
     kokoroNative: false,
+    previewText:
+      "Oi, tudo bem com você? Esta é uma prévia da minha voz brasileira. " +
+      "Estou lendo agora com calma e clareza, em português do Brasil — " +
+      "falando de ônibus, celular e um dia bem legal na cidade.",
+    qwenInstruct: "",
   },
   {
     id: "pt-BR",
@@ -54,6 +66,16 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroMlx: "p",
     kokoroOnnx: "pt-br",
     kokoroNative: true,
+    // Lexical BR markers (você/celular/ônibus/legal) steer CustomVoice away from European PT.
+    previewText:
+      "Oi, tudo bem com você? Esta é uma prévia da minha voz brasileira. " +
+      "Estou lendo agora com calma e clareza, em português do Brasil — " +
+      "falando de ônibus, celular e um dia bem legal na cidade.",
+    qwenInstruct:
+      "Speak Brazilian Portuguese from Brazil only (português brasileiro / sotaque do Brasil). " +
+      "Use Brazilian pronunciation and vocabulary (você, celular, ônibus). " +
+      "Do not use a European Portuguese accent from Portugal (tu/telemóvel/autocarro). " +
+      "Calm, clear, neutral book narrator.",
   },
   {
     id: "en-US",
@@ -63,6 +85,9 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroMlx: "a",
     kokoroOnnx: "en-us",
     kokoroNative: true,
+    previewText:
+      "Hello. This is a preview of my voice, reading in a calm and clear tone.",
+    qwenInstruct: "",
   },
   {
     id: "en-GB",
@@ -72,6 +97,10 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroMlx: "b",
     kokoroOnnx: "en-gb",
     kokoroNative: true,
+    previewText:
+      "Hello. This is a preview of my voice, reading in a calm and clear tone.",
+    qwenInstruct:
+      "Speak British English (UK), not American English. Calm, clear, neutral book narrator.",
   },
   {
     id: "es-ES",
@@ -81,6 +110,9 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroMlx: "e",
     kokoroOnnx: "es",
     kokoroNative: true,
+    previewText:
+      "Hola. Esta es una muestra de mi voz, leyendo con un tono calmo y claro.",
+    qwenInstruct: "",
   },
   {
     id: "fr-FR",
@@ -90,6 +122,9 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroMlx: "f",
     kokoroOnnx: "fr-fr",
     kokoroNative: true,
+    previewText:
+      "Bonjour. Voici un aperçu de ma voix, qui lit d'un ton calme et clair.",
+    qwenInstruct: "",
   },
   {
     id: "it-IT",
@@ -99,6 +134,9 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroMlx: "i",
     kokoroOnnx: "it",
     kokoroNative: true,
+    previewText:
+      "Ciao. Questa è un'anteprima della mia voce, che legge con un tono calmo e chiaro.",
+    qwenInstruct: "",
   },
   {
     id: "de-DE",
@@ -108,6 +146,9 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroMlx: "a",
     kokoroOnnx: "en-us",
     kokoroNative: false,
+    previewText:
+      "Hallo. Das ist eine Vorschau meiner Stimme, die in ruhigem und klarem Ton liest.",
+    qwenInstruct: "",
   },
   {
     id: "ja-JP",
@@ -117,6 +158,9 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroMlx: "j",
     kokoroOnnx: "ja",
     kokoroNative: true,
+    previewText:
+      "こんにちは。これは私の声のプレビューです。落ち着いた、はっきりした声で読んでいます。",
+    qwenInstruct: "",
   },
   {
     id: "ko-KR",
@@ -126,6 +170,9 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroMlx: "a",
     kokoroOnnx: "en-us",
     kokoroNative: false,
+    previewText:
+      "안녕하세요. 이것은 제 목소리 미리듣기입니다. 차분하고 또렷한 톤으로 읽고 있습니다.",
+    qwenInstruct: "",
   },
   {
     id: "zh-CN",
@@ -135,6 +182,8 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroMlx: "z",
     kokoroOnnx: "zh",
     kokoroNative: true,
+    previewText: "你好。这是我的声音预览，用平静清晰的语调朗读。",
+    qwenInstruct: "",
   },
   {
     id: "ru-RU",
@@ -144,6 +193,9 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroMlx: "a",
     kokoroOnnx: "en-us",
     kokoroNative: false,
+    previewText:
+      "Здравствуйте. Это образец моего голоса: я читаю спокойным и ясным тоном.",
+    qwenInstruct: "",
   },
   {
     id: "hi-IN",
@@ -153,6 +205,9 @@ export const NARRATION_LANGUAGES: NarrationLanguage[] = [
     kokoroMlx: "h",
     kokoroOnnx: "hi",
     kokoroNative: true,
+    previewText:
+      "नमस्ते। यह मेरी आवाज़ का पूर्वावलोकन है, शांत और स्पष्ट स्वर में।",
+    qwenInstruct: "",
   },
 ];
 
@@ -266,4 +321,25 @@ export function languagePayloadForTts(
   }
 
   return lang.kokoroMlx;
+}
+
+/** Spoken sample for UI preview and Qwen ICL (`ref_text` must match the WAV). */
+export function previewTextForLanguage(languageId: string): string {
+  return getNarrationLanguage(languageId).previewText;
+}
+
+/** Append locale accent steering to the stable Qwen narrator instruct. */
+export function mergeQwenInstruct(languageId: string, baseInstruct: string): string {
+  const extra = getNarrationLanguage(languageId).qwenInstruct.trim();
+
+  if (!extra) {
+    return baseInstruct;
+  }
+
+  return `${baseInstruct} ${extra}`;
+}
+
+/** Disk/memory cache tag: `pt-br`, `en-us`, `auto`, … */
+export function voicePreviewCacheTag(languageId: string): string {
+  return resolveNarrationLanguageId(languageId).toLowerCase();
 }
