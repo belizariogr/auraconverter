@@ -43,7 +43,7 @@ python -c "from huggingface_hub import snapshot_download; snapshot_download('mlx
 python -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit', local_dir='models/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit')"
 ```
 
-Com o Base instalado, cada voz usa o WAV em `assets/voice-previews/` como `ref_audio` + transcript como `ref_text` em **todos** os blocos.
+Com o Base instalado, cada voz usa o WAV gerado em tempo de execução sob `AURA_DATA_DIR/assets/voice-previews/` (não vai no git nem no pacote do app) como `ref_audio` + transcript como `ref_text` em **todos** os blocos.
 
 ## Rodar
 

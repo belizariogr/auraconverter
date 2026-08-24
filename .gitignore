@@ -25,3 +25,4 @@ tts-accel.json
 tts-engine.json
 *.pyc
 .venv/
+assets/voice-previews/

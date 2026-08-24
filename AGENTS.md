@@ -167,7 +167,8 @@ When the user requests a durable behavior change, record it here or in the relev
 - Last-used voice per TTS engine in `localStorage` (`aura-reader-voice-by-engine`)
 - Qwen `pt-BR`: steer Brazilian accent via strong `qwenInstruct` + BR lexical preview/ICL text (`você`/`celular`/`ônibus`); bump `QWEN_TTS_PREVIEW_CACHE_VERSION` (current default `1.7b-narrate-v1`) when preview copy, delivery style, or model size changes. ICL narration ignores `instruct` — accent and tone live in the preview WAV. Instruct must request normal volume + light emotion (not whisper / not flat).
 - Qwen MLX default models: **1.7B 8-bit** Base + CustomVoice (`mlx-community/Qwen3-TTS-12Hz-1.7B-*-8bit`). Torch: `Qwen/Qwen3-TTS-12Hz-1.7B-*`.
-- Qwen previews: CustomVoice generates each speaker preset; Base ICL clones that WAV at narration time — both models should be installed
+- Qwen previews: CustomVoice generates each speaker preset at runtime into `AURA_DATA_DIR/assets/voice-previews/` (never git / never bundled); Base ICL clones that WAV at narration time — both models should be installed
+- Do not commit or package `assets/voice-previews/` — user-generated ICL anchors only
 - A line/paragraph of only digits and spaces (`42`, `1 0`, `1 3`), with optional wrappers `()` `[]`, is a printed page number: drop it (PDF: first/last line of the page) and insert `\n\n\n` (`PAGE_NUMBER_GAP`). Do not collapse that gap in sanitize, Qwen `\n{4,}` capping, or the OCR-repair model. Letters keep the line.
 
 ## Child DOX Index

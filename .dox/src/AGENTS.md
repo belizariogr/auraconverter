@@ -17,7 +17,7 @@ React UI (`vite`) for Aura Converter: document queue, voice/engine setup, narrat
 - Output format `mp3` | `m4b`; cover export is opt-in per document (`exportCover`).
 - Persist last-used `voice` (per engine), `narrationLanguage`, and `narrationSpeed` in `localStorage`; new documents inherit those prefs (language falls back to OS locale only if never set).
 - Also keep `narrationLanguage` / `narrationSpeed` per document in IndexedDB session restore.
-- Voice preview POST/DELETE `/api/voice-preview` sends `{ voiceName, language, speed }`; disk key is voice+locale+speed (`…_s100_…`). Qwen: TTS@1× then `atempo`, saved WAV is the ICL anchor. Kokoro: native `speed` on `/tts`. Speed is applied only there — encode must not atempo again.
+- Voice preview POST/DELETE `/api/voice-preview` sends `{ voiceName, language, speed }`; disk key is voice+locale+speed under `AURA_DATA_DIR/assets/voice-previews/` (gitignored, not packaged). Qwen: TTS@1× then `atempo`, saved WAV is the ICL anchor. Kokoro: native `speed` on `/tts`. Speed is applied only there — encode must not atempo again.
 - Changing speed invalidates the in-UI preview blob cache (new sample for that rate).
 - With Qwen, extracted/editable text must not contain `<break>` tags (use `\n\n\n` in their place).
 - DELETE `/api/voice-preview` removes the saved WAV+TXT for that voice+locale+speed; UI regenerates on the next play (↺ button deletes then plays).

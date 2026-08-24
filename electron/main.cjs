@@ -86,7 +86,7 @@ function hasTtsRuntimeReady(dir) {
 }
 
 function seedDataFromBundle(auraRoot, dataDir) {
-  // Voice anchors live in auraRoot/assets/voice-previews (bundled); no copy needed.
+  // Voice previews are generated on demand under dataDir/assets/voice-previews.
 
   const envSeed = path.join(auraRoot, ".env");
   const envDest = path.join(dataDir, ".env");
@@ -449,7 +449,7 @@ async function startBackend(auraRoot) {
       TTS_PORT: String(TTS_PORT),
       PORT: String(APP_PORT),
       QWEN_TTS_PRELOAD: process.env.QWEN_TTS_PRELOAD ?? "0",
-      VOICE_PREVIEW_DIR: path.join(auraRoot, "assets", "voice-previews"),
+      VOICE_PREVIEW_DIR: path.join(dataDir, "assets", "voice-previews"),
     },
   });
 

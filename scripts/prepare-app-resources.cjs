@@ -7,8 +7,8 @@
  *     qwen3-tts-apple-silicon/  (darwin only)
  *     tts/torch/                (win32/linux only)
  *     tts-accel.json
- *     assets/voice-previews/ (ICL voice anchors)
  *
+ * Voice previews are NOT bundled — generated at runtime under AURA_DATA_DIR.
  * Usage:
  *   node scripts/prepare-app-resources.cjs [--platform=darwin|win32|linux] [--accel=cuda|rocm|cpu]
  *
@@ -238,15 +238,6 @@ function seedCommon() {
     fs.mkdirSync(path.dirname(dst), { recursive: true });
     fs.cpSync(src, dst, { recursive: true });
     console.log(`[prepare-app-resources] Bundled node_modules/@napi-rs/${name}`);
-  }
-
-  const previewSrc = path.join(root, "assets", "voice-previews");
-  const previewDst = path.join(out, "assets", "voice-previews");
-  if (fs.existsSync(previewSrc)) {
-    fs.cpSync(previewSrc, previewDst, { recursive: true });
-    console.log("[prepare-app-resources] Bundled assets/voice-previews");
-  } else {
-    console.warn("[prepare-app-resources] Missing assets/voice-previews — ICL anchors unavailable");
   }
 
   const envSrc = path.join(root, ".env");

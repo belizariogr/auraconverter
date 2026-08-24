@@ -350,7 +350,7 @@ function resolveQwenLaunch(): {
   cwd: string;
   env: NodeJS.ProcessEnv;
 } {
-  const previewDir = path.join(AURA_ROOT, "assets", "voice-previews");
+  const previewDir = path.join(AURA_DATA_DIR, "assets", "voice-previews");
   const modelsDir = resolveModelsDir(AURA_ROOT, AURA_DATA_DIR, "qwen3");
   const accel = readTtsAccel();
   const useTorch = process.platform === "win32" || process.platform === "linux";
@@ -1818,8 +1818,9 @@ async function cleanupNarrationArtifact(id: string) {
   if (art.coverPath) await fs.promises.unlink(art.coverPath).catch(() => undefined);
 }
 
-/** WAV + transcript used as voice-reference (ref_audio / ref_text for ICL). */
-const VOICE_PREVIEW_DIR = path.join(AURA_ROOT, "assets", "voice-previews");
+/** WAV + transcript used as voice-reference (ref_audio / ref_text for ICL).
+ * Generated at runtime under AURA_DATA_DIR — never bundled or committed. */
+const VOICE_PREVIEW_DIR = path.join(AURA_DATA_DIR, "assets", "voice-previews");
 /** In-memory WAV previews (base64) layered on disk cache. Key: voice+locale+speed. */
 const voicePreviewCache = new Map<string, string>();
 
