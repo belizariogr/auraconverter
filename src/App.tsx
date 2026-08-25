@@ -1971,6 +1971,23 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
               narrationTextHash: null,
             });
           } else if (payload.type === "error") {
+            const failedCompleted = Number(payload.completed);
+            const failedTotal = Number(payload.total);
+
+            if (
+              Number.isFinite(failedCompleted) &&
+              Number.isFinite(failedTotal) &&
+              failedTotal > 0
+            ) {
+              updateDoc(doc.id, {
+                narrationProgress: {
+                  completed: Math.min(failedTotal, Math.max(0, failedCompleted)),
+                  total: failedTotal,
+                },
+                narrationTextHash: textHash,
+              });
+            }
+
             throw new Error(`${doc.file.name}: ${payload.error || "Ocorreu um erro durante o processamento."}`);
           }
         } catch (jsonErr: any) {

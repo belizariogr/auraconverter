@@ -23,6 +23,7 @@ React UI (`vite`) for Aura Converter: document queue, voice/engine setup, narrat
 - DELETE `/api/voice-preview` removes the saved WAV+TXT for that voice+locale+speed; UI regenerates on the next play (↺ button deletes then plays).
 - `ModelSetup` shows the absolute `modelsDir` path so the user can delete weights manually if needed.
 - `NarrationSpeedSlider` — range control for per-document narration speed.
+- On SSE `error` during TTS with `completed`/`total`, persist `narrationProgress` so resume retries the failed block (server discards that block's PCM and does not skip ahead).
 
 ## Work Guidance
 

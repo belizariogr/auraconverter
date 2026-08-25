@@ -148,7 +148,7 @@ Default section order:
 
 ## Purpose (this repo)
 
-Aura Converter / AuraReader: Electron + Express app that extracts PDF/EPUB text, narrates locally (Qwen3-TTS MLX on Mac, or Kokoro), and writes **MP3** or **M4B**. Root TypeScript (`server.ts`, `mediaConvert.ts`, `coverExtract.ts`, `narrationLanguage.ts`, TTS launch helpers) is owned here.
+Aura Converter / AuraReader: Electron + Express app that extracts PDF/EPUB text, narrates locally (Qwen3-TTS MLX on Mac, or Kokoro), and writes **MP3** or **M4B**. Root TypeScript (`server.ts`, `mediaConvert.ts`, `coverExtract.ts`, `narrationLanguage.ts`, `fileLog.ts`, TTS launch helpers) is owned here.
 
 ## User Preferences
 
@@ -162,6 +162,8 @@ When the user requests a durable behavior change, record it here or in the relev
 - Apple M5: mlx-audio `mx.clear_cache()` must not run mid-`generate()`. Pin mlx / mlx-metal ≥ 0.32.1 and mlx-audio ≥ 0.5.0 (0.30.3 drops mid-utterance Qwen audio). Do **not** force `MLX_ENABLE_TF32=0`.
 - Qwen TTS: never insert `<break>` tags in extracted or editable text — use `\n\n\n` instead. Kokoro still uses `<break>` as silent PCM.
 - Chunk PCM cache under Application Support is kept after encode unless the user asks to delete it
+- Backend logs are teed to `AURA_DATA_DIR/logs/backend-YYYY-MM-DD.log` (also exposed as `logPath` on `/api/health`); TTS child stdout/stderr go to the same log
+- On per-block TTS failure: retry the same block up to **2** times (3 attempts total); if still failing, discard that block's PCM attempt, stop the run (do not skip ahead), keep prior cache; continuing narration retries the same failed block
 - Do not commit secrets (`.env`, credentials)
 - Per-book `narrationLanguage` (BCP-47 or `auto`): persist with document state; last used also in `localStorage` so new books start with that language (else OS locale); send to Qwen (`lang_code` names) and Kokoro (MLX letter / ONNX `en-us` style) via `/tts` `language`
 - Per-book `narrationSpeed` (0.75–1.5×, default 1): UI slider; last used in `localStorage` for new books; applied **once** — Qwen via sped preview WAV used as ICL anchor; Kokoro via native `/tts` `speed`. Do **not** also apply encode-time `atempo` (would double-accelerate). Fingerprint includes speed.

@@ -68,6 +68,7 @@ import {
   stripPageEdgePagination,
   type TextRepairPython,
 } from "./textRepair";
+import { getBackendLogPath, installFileLogging } from "./fileLog";
 
 function resolveBundledPython(auraRoot: string): { bin: string; home: string } | null {
   const envHome = process.env.AURA_PYTHON_HOME;
@@ -100,6 +101,8 @@ const AURA_DATA_DIR = process.env.AURA_DATA_DIR
   ? path.resolve(process.env.AURA_DATA_DIR)
   : AURA_ROOT;
 
+installFileLogging(AURA_DATA_DIR);
+
 dotenv.config({ path: path.join(AURA_DATA_DIR, ".env") });
 dotenv.config({ path: path.join(AURA_ROOT, ".env") });
 dotenv.config();
@@ -119,6 +122,11 @@ const TTS_PORT =
   })();
 /** Bun idle-timeout for /tts (ms). 0 / unset = disable (Qwen can take a while per chunk). */
 const TTS_TIMEOUT_MS = Number(process.env.TTS_TIMEOUT_MS ?? process.env.DIA_TTS_TIMEOUT_MS ?? "0");
+/** Extra TTS attempts after the first failure on a narration block (total attempts = 1 + this). */
+const CHUNK_TTS_RETRIES = Math.max(
+  0,
+  Number(process.env.CHUNK_TTS_RETRIES ?? "2") || 2
+);
 /** Stable narrator style applied to every chunk (must match Qwen server default intent). */
 const TTS_INSTRUCT =
   process.env.QWEN_TTS_INSTRUCT ||
@@ -459,7 +467,54 @@ function resolveTtsLaunch(engine: TtsEngineId = activeTtsEngine()): {
   if (engine === "kokoro") {
     return { ...resolveKokoroLaunch(), engine };
   }
+
   return { ...resolveQwenLaunch(), engine };
+}
+
+/** Forward child stdout/stderr into console (and thus the file log). */
+function attachChildLogStreams(child: ChildProcess, label: string): void {
+  const forward = (
+    stream: NodeJS.ReadableStream | null | undefined,
+    level: "log" | "error"
+  ) => {
+    if (!stream) {
+      return;
+    }
+
+    let buffer = "";
+    stream.setEncoding("utf8");
+    stream.on("data", (chunk: string) => {
+      buffer += chunk;
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (!line.trim()) {
+          continue;
+        }
+
+        if (level === "error") {
+          console.error(`[TTS:${label}] ${line}`);
+        } else {
+          console.log(`[TTS:${label}] ${line}`);
+        }
+      }
+    });
+    stream.on("end", () => {
+      if (!buffer.trim()) {
+        return;
+      }
+
+      if (level === "error") {
+        console.error(`[TTS:${label}] ${buffer}`);
+      } else {
+        console.log(`[TTS:${label}] ${buffer}`);
+      }
+    });
+  };
+
+  forward(child.stdout, "log");
+  forward(child.stderr, "error");
 }
 
 function getModelsStatus() {
@@ -518,8 +573,9 @@ async function ensureTtsRunning(timeoutMs = 90_000): Promise<void> {
       ttsChild = spawn(launch.command, launch.args, {
         cwd: launch.cwd,
         env: launch.env,
-        stdio: "inherit",
+        stdio: ["ignore", "pipe", "pipe"],
       });
+      attachChildLogStreams(ttsChild, label);
       ttsChild.on("exit", (code, signal) => {
         console.warn(`[TTS] ${label} exited (code=${code}, signal=${signal})`);
         ttsChild = null;
@@ -1649,6 +1705,7 @@ function isSafeDocId(docId: string): boolean {
   ) {
     return true;
   }
+
   // Legacy / short ids — path-safe only
   return /^[A-Za-z0-9_-]{6,80}$/.test(docId);
 }
@@ -1687,7 +1744,15 @@ async function readChunkCacheMeta(docId: string): Promise<ChunkCacheMeta | null>
   try {
     const raw = await fs.promises.readFile(chunkMetaPath(docId), "utf8");
     const meta = JSON.parse(raw) as ChunkCacheMeta;
-    if (!meta || meta.docId !== docId) return null;
+
+    if (!meta || meta.docId !== docId) {
+      return null;
+    }
+
+    if (!Array.isArray(meta.completedIndices)) {
+      meta.completedIndices = [];
+    }
+
     return meta;
   } catch {
     return null;
@@ -1753,12 +1818,38 @@ async function saveChunkPcm(
   const dir = chunkCacheDirFor(docId);
   await fs.promises.mkdir(dir, { recursive: true });
   await fs.promises.writeFile(chunkPcmPath(docId, index), pcm);
+
   if (!meta.completedIndices.includes(index)) {
     meta.completedIndices = [...meta.completedIndices, index].sort((a, b) => a - b);
   }
+
   meta.updatedAt = Date.now();
   await writeChunkCacheMeta(meta);
   return meta;
+}
+
+/** Drop a failed attempt so resume retries the same block (never skip ahead). */
+async function discardChunkAttempt(
+  docId: string,
+  index: number,
+  meta: ChunkCacheMeta | null
+): Promise<ChunkCacheMeta | null> {
+  await fs.promises.unlink(chunkPcmPath(docId, index)).catch(() => undefined);
+
+  if (!meta) {
+    return null;
+  }
+
+  const next: ChunkCacheMeta = {
+    ...meta,
+    completedIndices: meta.completedIndices.filter((i) => i !== index),
+    updatedAt: Date.now(),
+  };
+  await writeChunkCacheMeta(next);
+  console.warn(
+    `[ChunkCache] Tentativa do bloco ${index + 1} descartada (doc=${docId}); será narrado de novo ao continuar.`
+  );
+  return next;
 }
 
 async function concatCachedChunksToPcm(
@@ -1769,12 +1860,18 @@ async function concatCachedChunksToPcm(
   const out = await fs.promises.open(outPath, "w");
   let bytes = 0;
   let parts = 0;
+
   try {
     for (let i = 0; i < totalChunks; i++) {
       const chunkPath = chunkPcmPath(docId, i);
+
       try {
         const pcm = await fs.promises.readFile(chunkPath);
-        if (pcm.length === 0) continue;
+
+        if (pcm.length === 0) {
+          continue;
+        }
+
         await out.write(pcm);
         bytes += pcm.length;
         parts += 1;
@@ -1785,6 +1882,7 @@ async function concatCachedChunksToPcm(
   } finally {
     await out.close();
   }
+
   return { bytes, parts };
 }
 
@@ -1795,11 +1893,16 @@ async function chunkCacheStatus(docId: string): Promise<{
   voice: string | null;
   engine: string | null;
 } | null> {
-  if (!isSafeDocId(docId)) return null;
+  if (!isSafeDocId(docId)) {
+    return null;
+  }
+
   const meta = await readChunkCacheMeta(docId);
+
   if (!meta) {
     return { exists: false, completed: 0, total: 0, voice: null, engine: null };
   }
+
   return {
     exists: meta.completedIndices.length > 0,
     completed: meta.completedIndices.length,
@@ -2400,6 +2503,7 @@ app.get("/api/health", async (req, res) => {
   res.json({
     status: "ok",
     time: new Date().toISOString(),
+    logPath: getBackendLogPath(),
     models,
     tts: {
       provider: models.engine === "kokoro" ? "kokoro" : "qwen3-tts",
@@ -3018,66 +3122,146 @@ app.post("/api/narrate-stream", async (req, res) => {
       if (breakSeconds != null) {
         pcm = silencePcmS16le(sampleRate, breakSeconds);
       } else {
-        const heartbeat = setInterval(() => {
-          sendEvent({
-            type: "status",
-            step: "tts",
-            current: partNum,
-            total: totalChunks,
-            message: `Narrando parte ${partNum} de ${totalChunks} — ${engineLabel} ainda gerando...`,
-          });
-        }, 10_000);
+        const maxAttempts = 1 + CHUNK_TTS_RETRIES;
+        let lastFailureReason = "falha desconhecida no TTS";
+        let succeeded = false;
 
-        try {
-          const result = await synthesizeWithTts(
-            chunk,
-            voice,
-            taskId,
-            taskAbort?.signal,
-            voiceAnchor
-              ? {
-                  refAudioPath: voiceAnchor.refAudioPath,
-                  refText: voiceAnchor.refText,
-                  language: ttsLanguage,
-                  instruct: mergeQwenInstruct(languageId, TTS_INSTRUCT),
-                }
-              : {
-                  skipIcl: true,
-                  language: ttsLanguage,
-                  instruct: mergeQwenInstruct(languageId, TTS_INSTRUCT),
-                  ...(engine === "kokoro" ? { speed: narrationSpeed } : {}),
-                }
-          );
-          pcm = result.pcm;
-          sampleRate = result.sampleRate;
-          cancelled = result.cancelled;
-          if (i === 0) {
-            console.log(
-              `[NarrateStream] Chunk 1 TTS done (engine=${engine}, voice=${voice}, icl=${!!result.icl}, cancelled=${cancelled})`
-            );
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          if (taskId) {
+            const task = activeTasks.get(taskId);
+
+            if (task?.stopped || task?.abort.signal.aborted) {
+              console.log(
+                `[NarrateStream] Task ${taskId} was stopped by user at chunk index ${i}.`
+              );
+              wasStoppedEarly = true;
+              break;
+            }
           }
-          if (engine === "qwen3" && !result.icl && !cancelled) {
+
+          if (attempt > 1) {
+            sendEvent({
+              type: "status",
+              step: "tts",
+              current: partNum,
+              total: totalChunks,
+              message: `Re-tentando bloco ${partNum} de ${totalChunks} (tentativa ${attempt}/${maxAttempts})...`,
+            });
             console.warn(
-              `[NarrateStream] Chunk ${partNum}: ICL not used for voice=${voice} — ` +
-                "preview anchor may be missing or Base encoder not ready."
+              `[NarrateStream] Chunk ${partNum}: retry ${attempt}/${maxAttempts} after: ${lastFailureReason}`
             );
           }
-        } catch (ttsErr: any) {
-          console.warn(`[NarrateStream] Chunk ${partNum} failed:`, ttsErr?.message || ttsErr);
-          if (taskId && activeTasks.get(taskId)?.stopped) {
-            wasStoppedEarly = true;
-            break;
-          }
-          continue;
-        } finally {
-          clearInterval(heartbeat);
-        }
-      }
 
-      if (cancelled) {
-        console.log(`[NarrateStream] TTS cancelled mid-chunk at index ${i}.`);
-        wasStoppedEarly = true;
-        break;
+          const heartbeat = setInterval(() => {
+            sendEvent({
+              type: "status",
+              step: "tts",
+              current: partNum,
+              total: totalChunks,
+              message:
+                attempt > 1
+                  ? `Re-tentando bloco ${partNum} — ${engineLabel} ainda gerando (tentativa ${attempt}/${maxAttempts})...`
+                  : `Narrando parte ${partNum} de ${totalChunks} — ${engineLabel} ainda gerando...`,
+            });
+          }, 10_000);
+
+          try {
+            const result = await synthesizeWithTts(
+              chunk,
+              voice,
+              taskId,
+              taskAbort?.signal,
+              voiceAnchor
+                ? {
+                    refAudioPath: voiceAnchor.refAudioPath,
+                    refText: voiceAnchor.refText,
+                    language: ttsLanguage,
+                    instruct: mergeQwenInstruct(languageId, TTS_INSTRUCT),
+                  }
+                : {
+                    skipIcl: true,
+                    language: ttsLanguage,
+                    instruct: mergeQwenInstruct(languageId, TTS_INSTRUCT),
+                    ...(engine === "kokoro" ? { speed: narrationSpeed } : {}),
+                  }
+            );
+            pcm = result.pcm;
+            sampleRate = result.sampleRate;
+            cancelled = result.cancelled;
+
+            if (i === 0 && attempt === 1) {
+              console.log(
+                `[NarrateStream] Chunk 1 TTS done (engine=${engine}, voice=${voice}, icl=${!!result.icl}, cancelled=${cancelled})`
+              );
+            }
+
+            if (engine === "qwen3" && !result.icl && !cancelled) {
+              console.warn(
+                `[NarrateStream] Chunk ${partNum}: ICL not used for voice=${voice} — ` +
+                  "preview anchor may be missing or Base encoder not ready."
+              );
+            }
+
+            if (cancelled) {
+              succeeded = true;
+              break;
+            }
+
+            if (pcm.length === 0) {
+              lastFailureReason = "TTS retornou áudio vazio.";
+              console.error(
+                `[NarrateStream] Chunk ${partNum} attempt ${attempt}/${maxAttempts}: ${lastFailureReason}`
+              );
+              continue;
+            }
+
+            succeeded = true;
+            break;
+          } catch (ttsErr: unknown) {
+            lastFailureReason =
+              ttsErr instanceof Error ? ttsErr.message : String(ttsErr);
+            console.error(
+              `[NarrateStream] Chunk ${partNum} attempt ${attempt}/${maxAttempts} failed:`,
+              lastFailureReason
+            );
+
+            if (taskId && activeTasks.get(taskId)?.stopped) {
+              wasStoppedEarly = true;
+              break;
+            }
+          } finally {
+            clearInterval(heartbeat);
+          }
+        }
+
+        if (wasStoppedEarly) {
+          break;
+        }
+
+        if (cancelled) {
+          console.log(`[NarrateStream] TTS cancelled mid-chunk at index ${i}.`);
+          wasStoppedEarly = true;
+          break;
+        }
+
+        if (!succeeded || pcm.length === 0) {
+          if (docId) {
+            cacheMeta = await discardChunkAttempt(docId, i, cacheMeta);
+            completedSet.delete(i);
+          }
+
+          await fs.promises.unlink(pcmPath).catch(() => undefined);
+          sendEvent({
+            type: "error",
+            error:
+              `Falha no bloco ${partNum} de ${totalChunks} após ${maxAttempts} tentativas: ${lastFailureReason}. ` +
+              "O bloco foi descartado — continue a narração para tentar esse bloco novamente.",
+            failedChunk: partNum,
+            completed: completedSet.size,
+            total: totalChunks,
+          });
+          return res.end();
+        }
       }
 
       if (pcm.length > 0 && docId && cacheMeta) {
