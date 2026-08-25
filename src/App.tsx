@@ -107,8 +107,6 @@ interface DocItem {
   narrationTextHash: string | null;
   /** BCP-47 (or `auto`) for TTS; defaults to the OS locale. */
   narrationLanguage: NarrationLanguageId;
-  /** Playback speed multiplier (encode-time atempo); default 1. */
-  narrationSpeed: number;
 }
 
 type PagePreviewKey = "start" | "end" | "cover";
@@ -211,7 +209,6 @@ interface PersistedDoc {
   narrationProgress: { completed: number; total: number } | null;
   narrationTextHash: string | null;
   narrationLanguage?: string;
-  narrationSpeed?: number;
 }
 
 interface PersistedDocumentsState {
@@ -220,36 +217,68 @@ interface PersistedDocumentsState {
   docs: PersistedDoc[];
 }
 
-function loadSavedVoice(voices: Voice[], engine: string): string {
+function migrateVoiceId(voiceId: string | null | undefined): string | null {
+  if (!voiceId)
+    return null;
+
+  if (voiceId === "Ethan")
+    return "Eric";
+
+  if (voiceId === "Chelsie")
+    return "Sohee";
+
+  return voiceId;
+}
+
+/** Raw saved voice id for an engine (localStorage only — does not write). */
+function peekSavedVoiceId(engine: string): string | null {
   try {
-    const byEngine = JSON.parse(localStorage.getItem(ENGINE_VOICE_STORAGE_KEY) || "{}") as Record<
-      string,
-      string
-    >;
-    if (byEngine[engine] && voices.some((v) => v.id === byEngine[engine])) {
-      return byEngine[engine];
-    }
-    const saved = localStorage.getItem(VOICE_STORAGE_KEY);
-    if (saved && voices.some((v) => v.id === saved)) return saved;
-    if (saved === "Ethan") return voices.find((v) => v.id === "Eric")?.id || voices[0]?.id || "Vivian";
-    if (saved === "Chelsie") return voices.find((v) => v.id === "Sohee")?.id || voices[0]?.id || "Vivian";
+    const byEngine = JSON.parse(
+      localStorage.getItem(ENGINE_VOICE_STORAGE_KEY) || "{}"
+    ) as Record<string, string>;
+    const fromEngine = migrateVoiceId(byEngine[engine]);
+
+    if (fromEngine)
+      return fromEngine;
+
+    return migrateVoiceId(localStorage.getItem(VOICE_STORAGE_KEY));
   } catch {
-    // ignore
+    return null;
   }
-  return voices[0]?.id || (engine === "kokoro" ? "af_heart" : "Vivian");
+}
+
+function loadSavedVoice(voices: Voice[], engine: string): string {
+  const fallback =
+    voices[0]?.id || (engine === "kokoro" ? "af_heart" : "Vivian");
+  const saved = peekSavedVoiceId(engine);
+
+  if (saved && voices.some((voice) => voice.id === saved))
+    return saved;
+
+  if (saved === "Eric") {
+    return voices.find((voice) => voice.id === "Eric")?.id || fallback;
+  }
+
+  if (saved === "Sohee") {
+    return voices.find((voice) => voice.id === "Sohee")?.id || fallback;
+  }
+
+  return fallback;
 }
 
 function persistVoice(engine: string, voiceId: string) {
+  if (!voiceId)
+    return;
+
   try {
     localStorage.setItem(VOICE_STORAGE_KEY, voiceId);
-    const byEngine = JSON.parse(localStorage.getItem(ENGINE_VOICE_STORAGE_KEY) || "{}") as Record<
-      string,
-      string
-    >;
+    const byEngine = JSON.parse(
+      localStorage.getItem(ENGINE_VOICE_STORAGE_KEY) || "{}"
+    ) as Record<string, string>;
     byEngine[engine] = voiceId;
     localStorage.setItem(ENGINE_VOICE_STORAGE_KEY, JSON.stringify(byEngine));
   } catch {
-    // ignore
+    // ignore quota / private mode
   }
 }
 
@@ -425,7 +454,6 @@ function serializeDoc(doc: DocItem): PersistedDoc | null {
     narrationProgress: doc.narrationProgress,
     narrationTextHash: doc.narrationTextHash,
     narrationLanguage: doc.narrationLanguage,
-    narrationSpeed: doc.narrationSpeed,
   };
 }
 
@@ -465,9 +493,6 @@ async function restoreDoc(saved: PersistedDoc): Promise<DocItem> {
     narrationTextHash: saved.narrationTextHash ?? null,
     narrationLanguage: resolveNarrationLanguageId(
       saved.narrationLanguage || loadSavedNarrationLanguage()
-    ),
-    narrationSpeed: clampNarrationSpeed(
-      saved.narrationSpeed ?? loadSavedNarrationSpeed()
     ),
   };
 }
@@ -525,21 +550,26 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
     exportCover: boolean;
   } | null>(null);
 
-  // Shared configuration
+  // Shared narrador prefs (global — not per document)
   const [voices, setVoices] = useState<Voice[]>(FALLBACK_QWEN_VOICES);
   const [ttsEngine, setTtsEngine] = useState<"qwen3" | "kokoro">("qwen3");
   const [kokoroDevice, setKokoroDevice] = useState<"cpu" | "gpu">("gpu");
   const [kokoroBackend, setKokoroBackend] = useState<"mlx" | "onnx">("mlx");
-  const [selectedVoice, setSelectedVoice] = useState<string>("Vivian");
+  const [selectedVoice, setSelectedVoice] = useState<string>(
+    () => peekSavedVoiceId("qwen3") || peekSavedVoiceId("kokoro") || "Vivian"
+  );
+  const [narrationSpeed, setNarrationSpeed] = useState<number>(() =>
+    loadSavedNarrationSpeed()
+  );
+  const ttsEngineRef = useRef<"qwen3" | "kokoro">(ttsEngine);
+  ttsEngineRef.current = ttsEngine;
 
   const completedDocs = documents.filter((d) => d.audioUrl);
   const activeDoc = documents.find((d) => d.id === activeDocId) ?? documents[0] ?? null;
   const previewLanguageId =
     activeDoc?.narrationLanguage ?? detectSystemNarrationLanguage();
   const previewLanguage = getNarrationLanguage(previewLanguageId);
-  const previewSpeed = clampNarrationSpeed(
-    activeDoc?.narrationSpeed ?? NARRATION_SPEED_DEFAULT
-  );
+  const previewSpeed = clampNarrationSpeed(narrationSpeed);
   const reviewDoc = documents.find((d) => d.id === reviewDocId) ?? documents[0] ?? null;
   const resultDoc =
     documents.find((d) => d.id === resultDocId) ?? completedDocs[0] ?? null;
@@ -553,35 +583,39 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
       try {
         const res = await fetch("/api/tts-engine");
         const body = await res.json();
-        if (cancelled || !res.ok) return;
+
+        if (cancelled)
+          return;
+
+        if (!res.ok)
+          return;
+
         const engine = body.engine === "kokoro" ? "kokoro" : "qwen3";
         const list = Array.isArray(body.voices) && body.voices.length
           ? (body.voices as Voice[])
           : FALLBACK_QWEN_VOICES;
         setTtsEngine(engine);
+
         if (body.kokoroDevice === "cpu" || body.kokoroDevice === "gpu") {
           setKokoroDevice(body.kokoroDevice);
         }
+
         if (body.kokoroBackend === "mlx" || body.kokoroBackend === "onnx") {
           setKokoroBackend(body.kokoroBackend);
         }
+
         setVoices(list);
-        setSelectedVoice((prev) => {
-          if (list.some((v) => v.id === prev)) return prev;
-          return loadSavedVoice(list, engine);
-        });
+        // Hydrate from localStorage only — never persist on open (that was
+        // overwriting the saved voice with the default first entry).
+        setSelectedVoice(loadSavedVoice(list, engine));
       } catch {
-        // keep fallbacks
+        // keep peekSavedVoiceId initial state
       }
     })();
     return () => {
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    persistVoice(ttsEngine, selectedVoice);
-  }, [selectedVoice, ttsEngine]);
 
   // Restore document queue from IndexedDB on launch
   useEffect(() => {
@@ -674,7 +708,6 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
 
         if (activeRestored) {
           persistNarrationLanguage(activeRestored.narrationLanguage);
-          persistNarrationSpeed(activeRestored.narrationSpeed);
         }
 
         if (saved.outputFormat === "mp3" || saved.outputFormat === "m4b") {
@@ -1251,7 +1284,6 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
       narrationProgress: null,
       narrationTextHash: null,
       narrationLanguage: loadSavedNarrationLanguage(),
-      narrationSpeed: loadSavedNarrationSpeed(),
     }));
 
     setDocuments((prev) => [...prev, ...newDocs]);
@@ -1377,21 +1409,18 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
     );
   };
 
-  const setDocNarrationSpeed = (docId: string, speed: number) => {
+  const setGlobalNarrationSpeed = (speed: number) => {
     const next = clampNarrationSpeed(speed);
+    setNarrationSpeed(next);
     persistNarrationSpeed(next);
-    setDocuments((docs) =>
-      docs.map((d) => {
-        if (d.id !== docId)
-          return d;
+  };
 
-        if (d.narrationSpeed === next)
-          return d;
+  const selectVoice = (voiceId: string) => {
+    if (!voiceId)
+      return;
 
-        // Speed lives in preview/ICL (or Kokoro TTS); chunk PCM cache stays valid for Qwen.
-        return { ...d, narrationSpeed: next };
-      })
-    );
+    setSelectedVoice(voiceId);
+    persistVoice(ttsEngineRef.current, voiceId);
   };
 
   const handleClearAllFiles = () => {
@@ -1790,7 +1819,7 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
             (doc.fileType === "pdf" && doc.coverPage.trim() !== "")),
         sourceFileName: doc.file.name,
         language: doc.narrationLanguage,
-        speed: clampNarrationSpeed(doc.narrationSpeed),
+        speed: clampNarrationSpeed(narrationSpeed),
       }),
     });
 
@@ -3089,8 +3118,8 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
                     {ttsEngine === "kokoro"
                       ? `Kokoro (${kokoroBackend === "mlx" ? "MLX" : "ONNX fp32"} · ${
                           kokoroDevice === "gpu" ? "GPU" : "CPU"
-                        }). A prévia fala no idioma e na velocidade do livro (${previewLanguage.label}). Passe o mouse na voz e use ↺ para excluir a prévia salva e gerar outra.`
-                      : `Motor Qwen3. A prévia em ${previewLanguage.label} (na velocidade escolhida) vira a referência de voz da narração. Passe o mouse na voz e use ↺ para excluir a prévia salva e gerar outra.`}
+                        }). Voz e velocidade valem para todos os livros. A prévia fala no idioma do livro ativo (${previewLanguage.label}). Passe o mouse na voz e use ↺ para excluir a prévia salva e gerar outra.`
+                      : `Motor Qwen3. Voz e velocidade valem para todos os livros. A prévia em ${previewLanguage.label} (na velocidade escolhida) vira a referência de voz da narração. Passe o mouse na voz e use ↺ para excluir a prévia salva e gerar outra.`}
                   </p>
 
                   {previewError && (
@@ -3100,17 +3129,13 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
                     </div>
                   )}
 
-                  {activeDoc && (
-                    <div className="mb-4">
-                      <NarrationSpeedSlider
-                        value={activeDoc.narrationSpeed}
-                        onChange={(speed) =>
-                          setDocNarrationSpeed(activeDoc.id, speed)
-                        }
-                        disabled={loading}
-                      />
-                    </div>
-                  )}
+                  <div className="mb-4">
+                    <NarrationSpeedSlider
+                      value={narrationSpeed}
+                      onChange={setGlobalNarrationSpeed}
+                      disabled={loading}
+                    />
+                  </div>
 
                   <div className="space-y-4">
                     {(["Feminino", "Masculino"] as const).map((gender) => {
@@ -3142,11 +3167,11 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
                                   aria-checked={isSelected}
                                   tabIndex={0}
                                   title={voice.description}
-                                  onClick={() => setSelectedVoice(voice.id)}
+                                  onClick={() => selectVoice(voice.id)}
                                   onKeyDown={(e) => {
                                     if (e.key === "Enter" || e.key === " ") {
                                       e.preventDefault();
-                                      setSelectedVoice(voice.id);
+                                      selectVoice(voice.id);
                                     }
                                   }}
                                   className={`group relative flex items-center gap-2.5 rounded-xl border px-2.5 py-2 cursor-pointer transition-all ${
