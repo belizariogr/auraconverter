@@ -15,6 +15,7 @@ Qwen3-TTS FastAPI server on Apple Silicon (MLX). Used by `server.ts` on darwin.
 - Do **not** set `MLX_ENABLE_TF32=0`.
 - Sampling defaults (official Qwen3-TTS / mlx-audio): `temperature=0.9`, `top_k=50`, `top_p=1.0`, `repetition_penalty=1.05`, `max_tokens=2048`. Pass them explicitly on every `generate()`. Low temperature degenerates codec tokens.
 - Node splits Qwen prompts to ~280 chars; Kokoro may pack 5 paragraphs.
+- Do not emit TTS prompts with no letters/digits (e.g. orphan `”` + `\n\n\n`); coalesce into neighbors or silence.
 - Do **not** insert `<break>` into extracted text when the engine is Qwen. Node replaces those lines with `\n\n\n`. Collapse intra-line whitespace only; keep newlines.
 - CustomVoice `generate()` ignores `split_pattern`; Node owns text chunking.
 - Preview WAV+TXT under `AURA_DATA_DIR/assets/voice-previews/` (runtime-generated; not git / not packaged) are ICL anchors for Base (one per voice+locale+speed). Filename: `{voice}_{locale}_{sNNN}_{QWEN_TTS_PREVIEW_CACHE_VERSION}` (e.g. `vivian_pt-br_s100_1.7b-narrate-v1`). Current version default: `1.7b-narrate-v1`. Speed ≠ 1× is applied with ffmpeg `atempo` after CustomVoice generate, then saved — narrate uses that same file as `ref_audio`.

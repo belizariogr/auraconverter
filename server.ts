@@ -1465,13 +1465,67 @@ function paragraphWordCount(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
+/**
+ * True when the chunk has at least one letter or digit TTS can voice.
+ * Orphan quotes, dashes, and `\n\n\n` gaps alone are not speakable.
+ */
+function isSpeakableTtsText(text: string): boolean {
+  const stripped = text.replace(/\n{3,}/g, "\n").trim();
+
+  if (!stripped) {
+    return false;
+  }
+
+  return /[\p{L}\p{N}]/u.test(stripped);
+}
+
+function silenceSecondsForUnspeakableChunk(text: string): number {
+  const gapCount = text.match(/\n{3,}/g)?.length ?? 0;
+
+  if (gapCount > 0) {
+    return Math.min(10, Math.max(0.25, gapCount * 0.75));
+  }
+
+  return 0.25;
+}
+
+/** Fold punctuation-only / gap-only scraps into neighbors; never emit bare unspeakable TTS prompts. */
+function coalesceUnspeakableChunks(chunks: string[]): string[] {
+  const out: string[] = [];
+
+  for (const chunk of chunks) {
+    if (isPauseLine(chunk) || isSpeakableTtsText(chunk)) {
+      out.push(chunk);
+      continue;
+    }
+
+    if (out.length > 0 && !isPauseLine(out[out.length - 1])) {
+      const prev = out[out.length - 1];
+      const joiner =
+        prev.endsWith(QWEN_BREAK_GAP) || chunk.startsWith("\n") ? "" : "\n";
+      out[out.length - 1] = `${prev}${joiner}${chunk}`;
+      continue;
+    }
+
+    // After a pause / at start: keep a short silence if the scrap encodes a gap.
+    if (/\n{3,}/.test(chunk)) {
+      out.push("...");
+    }
+  }
+
+  return out.filter((c) => isPauseLine(c) || isSpeakableTtsText(c));
+}
+
 /** Spoken lines that would sound odd if TTS saw them without the surrounding exchange. */
 function isDialogueLine(text: string): boolean {
   return /^(?:[-–—―]|[“”"«»])/.test(text.trim());
 }
 
 function shouldAttachToPrevious(text: string, prev: string): boolean {
-  if (paragraphWordCount(text) < MIN_PARAGRAPH_WORDS) return true;
+  if (paragraphWordCount(text) < MIN_PARAGRAPH_WORDS) {
+    return true;
+  }
+
   // Consecutive spoken lines stay in one prompt (question + reply, etc.).
   return isDialogueLine(text) && isDialogueLine(prev);
 }
@@ -1484,6 +1538,7 @@ function shouldAttachToPrevious(text: string, prev: string): boolean {
 function splitOversizedChunk(text: string, maxChars: number): string[] {
   const trailingNewlines = text.match(/\n+$/)?.[0] ?? "";
   const trimmed = text.trim();
+
   if (trimmed.length <= maxChars) {
     return [trimmed + trailingNewlines];
   }
@@ -1495,25 +1550,43 @@ function splitOversizedChunk(text: string, maxChars: number): string[] {
   const pushWords = (s: string) => {
     const words = s.split(/\s+/).filter(Boolean);
     let buf = "";
+
     for (const word of words) {
       const next = buf ? `${buf} ${word}` : word;
+
       if (next.length <= maxChars) {
         buf = next;
       } else {
-        if (buf) out.push(buf);
-        buf = word;
+        if (buf) {
+          out.push(buf);
+        }
+
+        // Force-split a single oversized token (URL, etc.).
+        if (word.length > maxChars) {
+          for (let i = 0; i < word.length; i += maxChars) {
+            out.push(word.slice(i, i + maxChars));
+          }
+          buf = "";
+        } else {
+          buf = word;
+        }
       }
     }
-    if (buf) current = buf;
+
+    if (buf) {
+      current = buf;
+    }
   };
 
   for (const sentence of sentences) {
     const s = sentence.trim();
+
     if (!s) {
       continue;
     }
 
     const next = current ? `${current} ${s}` : s;
+
     if (next.length <= maxChars) {
       current = next;
       continue;
@@ -1524,6 +1597,7 @@ function splitOversizedChunk(text: string, maxChars: number): string[] {
     }
 
     current = "";
+
     if (s.length <= maxChars) {
       current = s;
     } else {
@@ -1534,6 +1608,7 @@ function splitOversizedChunk(text: string, maxChars: number): string[] {
   if (current) {
     out.push(current);
   }
+
   const parts = out.length > 0 ? out : [trimmed];
 
   if (trailingNewlines && parts.length > 0) {
@@ -1546,6 +1621,7 @@ function splitOversizedChunk(text: string, maxChars: number): string[] {
 function appendLogicalParagraphs(source: string, logical: string[]): void {
   for (const para of source.split(/\n+/)) {
     const trimmed = para.trim();
+
     if (!trimmed) {
       continue;
     }
@@ -1555,7 +1631,22 @@ function appendLogicalParagraphs(source: string, logical: string[]): void {
       continue;
     }
 
+    if (!isSpeakableTtsText(trimmed)) {
+      // Orphan punctuation (e.g. closing ”): glue onto the last speakable para.
+      for (let j = logical.length - 1; j >= 0; j--) {
+        if (logical[j] === QWEN_BREAK_GAP || isPauseLine(logical[j])) {
+          continue;
+        }
+
+        logical[j] = `${logical[j]}${trimmed}`;
+        break;
+      }
+
+      continue;
+    }
+
     const prev = logical[logical.length - 1];
+
     if (
       prev &&
       prev !== QWEN_BREAK_GAP &&
@@ -1577,8 +1668,10 @@ function splitTextIntoChunks(
 
   if (engine === "qwen3") {
     const sections = replaceBreakTagsWithNewlines(text).split(/\n{3,}/);
+
     for (let i = 0; i < sections.length; i++) {
       appendLogicalParagraphs(sections[i], logical);
+
       if (
         i < sections.length - 1 &&
         logical.length > 0 &&
@@ -1606,6 +1699,7 @@ function splitTextIntoChunks(
   for (const item of logical) {
     if (item === QWEN_BREAK_GAP) {
       flushGroup();
+
       if (chunks.length > 0) {
         chunks[chunks.length - 1] += QWEN_BREAK_GAP;
       }
@@ -1620,19 +1714,24 @@ function splitTextIntoChunks(
     }
 
     group.push(item);
+
     if (group.length >= PARAS_PER_CHUNK) {
       flushGroup();
     }
   }
+
   flushGroup();
 
   const merged: string[] = [];
+
   for (const chunk of chunks) {
     if (isPauseLine(chunk)) {
       merged.push(chunk);
       continue;
     }
+
     const last = merged[merged.length - 1];
+
     if (
       last &&
       !isPauseLine(last) &&
@@ -1644,7 +1743,9 @@ function splitTextIntoChunks(
       merged.push(chunk);
     }
   }
+
   let packed = merged;
+
   if (
     merged.length >= 2 &&
     !isPauseLine(merged[0]) &&
@@ -1655,12 +1756,15 @@ function splitTextIntoChunks(
     const joiner = first.endsWith(QWEN_BREAK_GAP) ? "" : "\n";
     packed = [`${first}${joiner}${second}`, ...rest];
   }
-  if (engine === "qwen3") {
-    return packed.flatMap((c) =>
-      isPauseLine(c) ? [c] : splitOversizedChunk(c, QWEN_MAX_CHUNK_CHARS)
-    );
-  }
-  return packed;
+
+  const sized =
+    engine === "qwen3"
+      ? packed.flatMap((c) =>
+          isPauseLine(c) ? [c] : splitOversizedChunk(c, QWEN_MAX_CHUNK_CHARS)
+        )
+      : packed;
+
+  return coalesceUnspeakableChunks(sized);
 }
 
 type NarrationArtifact = {
@@ -3121,6 +3225,14 @@ app.post("/api/narrate-stream", async (req, res) => {
 
       if (breakSeconds != null) {
         pcm = silencePcmS16le(sampleRate, breakSeconds);
+      } else if (!isSpeakableTtsText(chunk)) {
+        // Safety net for caches / edge cases: never send punctuation-only scraps to TTS.
+        const seconds = silenceSecondsForUnspeakableChunk(chunk);
+        console.warn(
+          `[NarrateStream] Chunk ${partNum}: unspeakable text → ${seconds}s silence ` +
+            `(len=${chunk.length}, preview=${JSON.stringify(chunk.slice(0, 40))})`
+        );
+        pcm = silencePcmS16le(sampleRate, seconds);
       } else {
         const maxAttempts = 1 + CHUNK_TTS_RETRIES;
         let lastFailureReason = "falha desconhecida no TTS";
@@ -3570,12 +3682,29 @@ app.post("/api/narrate", async (req, res) => {
       try {
         const breakSeconds =
           parseBreakSeconds(chunk) ?? (chunk.trim() === "..." ? 0.25 : null);
+
         if (breakSeconds != null) {
           const pcm = silencePcmS16le(sampleRate, breakSeconds);
+
           if (pcm.length > 0) {
             await fs.promises.appendFile(pcmPath, pcm);
             pcmBytes += pcm.length;
           }
+
+          continue;
+        }
+
+        if (!isSpeakableTtsText(chunk)) {
+          const pcm = silencePcmS16le(
+            sampleRate,
+            silenceSecondsForUnspeakableChunk(chunk)
+          );
+
+          if (pcm.length > 0) {
+            await fs.promises.appendFile(pcmPath, pcm);
+            pcmBytes += pcm.length;
+          }
+
           continue;
         }
 

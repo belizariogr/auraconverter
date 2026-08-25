@@ -161,6 +161,7 @@ When the user requests a durable behavior change, record it here or in the relev
 - Qwen3-TTS sampling defaults match official / mlx-audio: `temperature=0.9`, `top_k=50`, `top_p=1.0`, `repetition_penalty=1.05`, `max_tokens=2048` (override via `QWEN_TTS_*` env). Do not use low temperature (e.g. 0.3) — it degenerates codec tokens into silence/beeps/dropouts
 - Apple M5: mlx-audio `mx.clear_cache()` must not run mid-`generate()`. Pin mlx / mlx-metal ≥ 0.32.1 and mlx-audio ≥ 0.5.0 (0.30.3 drops mid-utterance Qwen audio). Do **not** force `MLX_ENABLE_TF32=0`.
 - Qwen TTS: never insert `<break>` tags in extracted or editable text — use `\n\n\n` instead. Kokoro still uses `<break>` as silent PCM.
+- Narration chunks must be speakable (at least one letter/digit): orphan punctuation / `\n\n\n`-only scraps are merged into neighbors or become silence — never sent to TTS alone
 - Chunk PCM cache under Application Support is kept after encode unless the user asks to delete it
 - Backend logs are teed to `AURA_DATA_DIR/logs/backend-YYYY-MM-DD.log` (also exposed as `logPath` on `/api/health`); TTS child stdout/stderr go to the same log
 - On per-block TTS failure: retry the same block up to **2** times (3 attempts total); if still failing, discard that block's PCM attempt, stop the run (do not skip ahead), keep prior cache; continuing narration retries the same failed block. Also save the failed block text + metadata under `AURA_DATA_DIR/logs/failed-chunks/` (`.json` + `.txt`) for diagnosis
