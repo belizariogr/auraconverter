@@ -68,7 +68,7 @@ import {
   stripPageEdgePagination,
   type TextRepairPython,
 } from "./textRepair";
-import { getBackendLogPath, installFileLogging } from "./fileLog";
+import { getBackendLogPath, installFileLogging, saveFailedNarrationChunk } from "./fileLog";
 
 function resolveBundledPython(auraRoot: string): { bin: string; home: string } | null {
   const envHome = process.env.AURA_PYTHON_HOME;
@@ -3250,15 +3250,36 @@ app.post("/api/narrate-stream", async (req, res) => {
             completedSet.delete(i);
           }
 
+          const dumpPath = saveFailedNarrationChunk({
+            docId,
+            chunkIndex: i,
+            partNum,
+            totalChunks,
+            voice,
+            engine,
+            language: ttsLanguage,
+            reason: lastFailureReason,
+            attempts: maxAttempts,
+            text: chunk,
+          });
+
+          if (dumpPath) {
+            console.error(
+              `[NarrateStream] Bloco ${partNum} salvo para diagnóstico: ${dumpPath}`
+            );
+          }
+
           await fs.promises.unlink(pcmPath).catch(() => undefined);
           sendEvent({
             type: "error",
             error:
               `Falha no bloco ${partNum} de ${totalChunks} após ${maxAttempts} tentativas: ${lastFailureReason}. ` +
-              "O bloco foi descartado — continue a narração para tentar esse bloco novamente.",
+              "O bloco foi descartado — continue a narração para tentar esse bloco novamente." +
+              (dumpPath ? ` Texto do bloco salvo em: ${dumpPath}` : ""),
             failedChunk: partNum,
             completed: completedSet.size,
             total: totalChunks,
+            failedChunkPath: dumpPath,
           });
           return res.end();
         }

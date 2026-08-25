@@ -163,7 +163,7 @@ When the user requests a durable behavior change, record it here or in the relev
 - Qwen TTS: never insert `<break>` tags in extracted or editable text — use `\n\n\n` instead. Kokoro still uses `<break>` as silent PCM.
 - Chunk PCM cache under Application Support is kept after encode unless the user asks to delete it
 - Backend logs are teed to `AURA_DATA_DIR/logs/backend-YYYY-MM-DD.log` (also exposed as `logPath` on `/api/health`); TTS child stdout/stderr go to the same log
-- On per-block TTS failure: retry the same block up to **2** times (3 attempts total); if still failing, discard that block's PCM attempt, stop the run (do not skip ahead), keep prior cache; continuing narration retries the same failed block
+- On per-block TTS failure: retry the same block up to **2** times (3 attempts total); if still failing, discard that block's PCM attempt, stop the run (do not skip ahead), keep prior cache; continuing narration retries the same failed block. Also save the failed block text + metadata under `AURA_DATA_DIR/logs/failed-chunks/` (`.json` + `.txt`) for diagnosis
 - Do not commit secrets (`.env`, credentials)
 - Per-book `narrationLanguage` (BCP-47 or `auto`): persist with document state; last used also in `localStorage` so new books start with that language (else OS locale); send to Qwen (`lang_code` names) and Kokoro (MLX letter / ONNX `en-us` style) via `/tts` `language`
 - Global `narrationSpeed` (0.75–1.5×, default 1): UI slider; persist only in `localStorage` (not per document); same speed for every book; load on app open; applied **once** — Qwen via sped preview WAV used as ICL anchor; Kokoro via native `/tts` `speed`. Do **not** also apply encode-time `atempo` (would double-accelerate). Fingerprint includes speed.
