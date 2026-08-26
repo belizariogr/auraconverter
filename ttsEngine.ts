@@ -99,131 +99,221 @@ export function writeKokoroBackend(
   writeEngineFile(auraDataDir, { kokoroBackend: backend });
 }
 
-/** Friendly voice catalog for Kokoro (English subset used in the UI). */
-export const KOKORO_VOICES = [
+export type VoiceLocale = "en-us" | "en-gb" | "pt-br";
+
+export type VoiceCatalogEntry = {
+  id: string;
+  name: string;
+  gender: "Feminino" | "Masculino";
+  description: string;
+  icon: string;
+  /** Overall grade from hexgrad VOICES.md (training data quality/quantity). */
+  grade?: string;
+  /** Voice language family for UI prioritization. */
+  locale?: VoiceLocale;
+};
+
+/** Sort key: A best → F worst; missing grade last. */
+export function voiceGradeSortKey(grade: string | undefined): number {
+  if (!grade) return 1000;
+  const letter = grade.charAt(0).toUpperCase();
+  const base = { A: 0, B: 10, C: 20, D: 30, E: 40, F: 50 }[letter];
+  if (base == null) return 900;
+  if (grade.endsWith("+")) return base - 1;
+  if (grade.endsWith("-")) return base + 1;
+  return base;
+}
+
+/** Friendly Kokoro catalog: curated EN + PT-BR with official Overall Grades. */
+export const KOKORO_VOICES: VoiceCatalogEntry[] = [
   {
     id: "af_heart",
     name: "Heart",
-    gender: "Feminino" as const,
-    description: "Voz feminina clara e natural (EN).",
+    gender: "Feminino",
+    description: "Voz feminina clara e natural (EN-US).",
     icon: "👩",
-  },
-  {
-    id: "af_sarah",
-    name: "Sarah",
-    gender: "Feminino" as const,
-    description: "Timbre suave para leituras longas.",
-    icon: "👩‍🦰",
+    grade: "A",
+    locale: "en-us",
   },
   {
     id: "af_bella",
     name: "Bella",
-    gender: "Feminino" as const,
-    description: "Presença expressiva e envolvente.",
+    gender: "Feminino",
+    description: "Presença expressiva e envolvente (EN-US).",
     icon: "🧑",
+    grade: "A-",
+    locale: "en-us",
+  },
+  {
+    id: "bf_emma",
+    name: "Emma",
+    gender: "Feminino",
+    description: "Britânica, boa dicção para leituras longas (EN-GB).",
+    icon: "👩‍🦰",
+    grade: "B-",
+    locale: "en-gb",
   },
   {
     id: "af_nicole",
     name: "Nicole",
-    gender: "Feminino" as const,
-    description: "Dicção limpa, boa para diálogos.",
+    gender: "Feminino",
+    description: "Dicção limpa, boa para diálogos (EN-US).",
     icon: "👩‍🎤",
+    grade: "B-",
+    locale: "en-us",
   },
   {
-    id: "am_adam",
-    name: "Adam",
-    gender: "Masculino" as const,
-    description: "Tom estável para capítulos longos.",
-    icon: "👨",
+    id: "af_sarah",
+    name: "Sarah",
+    gender: "Feminino",
+    description: "Timbre suave para leituras longas (EN-US).",
+    icon: "👩‍🦰",
+    grade: "C+",
+    locale: "en-us",
   },
   {
-    id: "am_michael",
-    name: "Michael",
-    gender: "Masculino" as const,
-    description: "Narração sólida e pausada.",
-    icon: "🧔",
+    id: "pf_dora",
+    name: "Dora",
+    gender: "Feminino",
+    description: "Português brasileiro — narração natural (PT-BR).",
+    icon: "👩",
+    locale: "pt-br",
   },
   {
     id: "am_fenrir",
     name: "Fenrir",
-    gender: "Masculino" as const,
-    description: "Presença mais grave e marcada.",
+    gender: "Masculino",
+    description: "Presença mais grave e marcada (EN-US).",
     icon: "🧑‍💼",
+    grade: "C+",
+    locale: "en-us",
+  },
+  {
+    id: "am_michael",
+    name: "Michael",
+    gender: "Masculino",
+    description: "Narração sólida e pausada (EN-US).",
+    icon: "🧔",
+    grade: "C+",
+    locale: "en-us",
   },
   {
     id: "am_puck",
     name: "Puck",
-    gender: "Masculino" as const,
-    description: "Tom mais leve e animado.",
+    gender: "Masculino",
+    description: "Tom mais leve e animado (EN-US).",
     icon: "👨‍🏫",
+    grade: "C+",
+    locale: "en-us",
+  },
+  {
+    id: "pm_alex",
+    name: "Alex",
+    gender: "Masculino",
+    description: "Português brasileiro — tom claro (PT-BR).",
+    icon: "👨",
+    locale: "pt-br",
+  },
+  {
+    id: "pm_santa",
+    name: "Santa",
+    gender: "Masculino",
+    description: "Português brasileiro — presença madura (PT-BR).",
+    icon: "🧔",
+    locale: "pt-br",
+  },
+  {
+    id: "am_adam",
+    name: "Adam",
+    gender: "Masculino",
+    description: "EN-US — dados de treino fracos (nota baixa).",
+    icon: "👨",
+    grade: "F+",
+    locale: "en-us",
   },
 ];
 
-export const QWEN_VOICES = [
+export const QWEN_VOICES: VoiceCatalogEntry[] = [
   {
     id: "Vivian",
     name: "Vivian",
-    gender: "Feminino" as const,
+    gender: "Feminino",
     description: "Narração clara e calorosa — boa para romances e não-ficção.",
     icon: "👩",
   },
   {
     id: "Serena",
     name: "Serena",
-    gender: "Feminino" as const,
+    gender: "Feminino",
     description: "Timbre suave, adequada para leituras longas.",
     icon: "👩‍🦰",
   },
   {
     id: "Sohee",
     name: "Sohee",
-    gender: "Feminino" as const,
+    gender: "Feminino",
     description: "Voz expressiva e natural.",
     icon: "🧑",
   },
   {
     id: "Ono_Anna",
     name: "Ono Anna",
-    gender: "Feminino" as const,
+    gender: "Feminino",
     description: "Dicção limpa, boa para diálogos.",
     icon: "👩‍🎤",
   },
   {
     id: "Ryan",
     name: "Ryan",
-    gender: "Masculino" as const,
+    gender: "Masculino",
     description: "Tom sereno e estável para capítulos longos.",
     icon: "👨",
   },
   {
     id: "Aiden",
     name: "Aiden",
-    gender: "Masculino" as const,
+    gender: "Masculino",
     description: "Presença mais animada e envolvente.",
     icon: "🧑‍💼",
   },
   {
     id: "Eric",
     name: "Eric",
-    gender: "Masculino" as const,
+    gender: "Masculino",
     description: "Dicção formal, boa para textos técnicos.",
     icon: "👨‍🏫",
   },
   {
     id: "Dylan",
     name: "Dylan",
-    gender: "Masculino" as const,
+    gender: "Masculino",
     description: "Tom sólido para narrativa geral.",
     icon: "🧔",
   },
   {
     id: "Uncle_Fu",
     name: "Uncle Fu",
-    gender: "Masculino" as const,
+    gender: "Masculino",
     description: "Timbre maduro e pausado.",
     icon: "🧓",
   },
 ];
+
+/** Prefer voices matching narration locale (e.g. pt-br), then by grade. */
+export function sortVoicesForLanguage(
+  voices: VoiceCatalogEntry[],
+  languageId: string
+): VoiceCatalogEntry[] {
+  const preferPt = languageId === "pt-br" || languageId.startsWith("pt");
+  return [...voices].sort((a, b) => {
+    const aMatch = preferPt ? a.locale === "pt-br" : a.locale !== "pt-br";
+    const bMatch = preferPt ? b.locale === "pt-br" : b.locale !== "pt-br";
+    if (aMatch !== bMatch) return aMatch ? -1 : 1;
+    const g = voiceGradeSortKey(a.grade) - voiceGradeSortKey(b.grade);
+    if (g !== 0) return g;
+    return a.name.localeCompare(b.name, "pt");
+  });
+}
 
 export function voicesForEngine(engine: TtsEngineId) {
   return engine === "kokoro" ? KOKORO_VOICES : QWEN_VOICES;

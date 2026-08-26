@@ -55,6 +55,44 @@ interface Voice {
   gender: "Feminino" | "Masculino";
   description: string;
   icon: string;
+  /** Overall grade from hexgrad VOICES.md (Kokoro). */
+  grade?: string;
+  /** Voice language family for prioritization. */
+  locale?: "en-us" | "en-gb" | "pt-br" | string;
+}
+
+function voiceGradeSortKey(grade: string | undefined): number {
+  if (!grade) return 1000;
+  const letter = grade.charAt(0).toUpperCase();
+  const base = { A: 0, B: 10, C: 20, D: 30, E: 40, F: 50 }[letter];
+  if (base == null) return 900;
+  if (grade.endsWith("+")) return base - 1;
+  if (grade.endsWith("-")) return base + 1;
+  return base;
+}
+
+/** Prefer locale match (e.g. pt-br), then better grade. */
+function sortVoicesForLanguage(voices: Voice[], languageId: string): Voice[] {
+  const preferPt = languageId === "pt-br" || languageId.startsWith("pt");
+  return [...voices].sort((a, b) => {
+    const aMatch = preferPt ? a.locale === "pt-br" : a.locale !== "pt-br";
+    const bMatch = preferPt ? b.locale === "pt-br" : b.locale !== "pt-br";
+    if (aMatch !== bMatch) return aMatch ? -1 : 1;
+    const g = voiceGradeSortKey(a.grade) - voiceGradeSortKey(b.grade);
+    if (g !== 0) return g;
+    return a.name.localeCompare(b.name, "pt");
+  });
+}
+
+function gradeBadgeClass(grade: string): string {
+  const letter = grade.charAt(0).toUpperCase();
+  if (letter === "A") return "border-emerald-500/40 bg-emerald-500/15 text-emerald-300";
+  if (letter === "B") return "border-sky-500/40 bg-sky-500/15 text-sky-300";
+  if (letter === "C") return "border-amber-500/40 bg-amber-500/15 text-amber-200";
+  if (letter === "D" || letter === "E" || letter === "F") {
+    return "border-rose-500/40 bg-rose-500/15 text-rose-300";
+  }
+  return "border-white/15 bg-white/5 text-slate-400";
 }
 
 interface EpubChapter {
@@ -3139,7 +3177,9 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
 
                   <div className="space-y-4">
                     {(["Feminino", "Masculino"] as const).map((gender) => {
-                      const genderVoices = voices.filter((v) => v.gender === gender);
+                      const genderVoices = sortVoicesForLanguage(voices, previewLanguageId).filter(
+                        (v) => v.gender === gender
+                      );
                       return (
                         <div key={gender}>
                           <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500 mb-2 px-0.5">
@@ -3166,7 +3206,11 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
                                   role="radio"
                                   aria-checked={isSelected}
                                   tabIndex={0}
-                                  title={voice.description}
+                                  title={
+                                    voice.grade
+                                      ? `${voice.description} · Nota ${voice.grade} (qualidade dos dados de treino, hexgrad)`
+                                      : voice.description
+                                  }
                                   onClick={() => selectVoice(voice.id)}
                                   onKeyDown={(e) => {
                                     if (e.key === "Enter" || e.key === " ") {
@@ -3184,8 +3228,25 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
                                     {voice.icon}
                                   </span>
                                   <div className="flex-1 min-w-0">
-                                    <span className={`block text-[13px] font-semibold truncate ${isSelected ? "text-white" : "text-slate-200"}`}>
-                                      {voice.name}
+                                    <span className="flex items-center gap-1.5 min-w-0">
+                                      <span className={`block text-[13px] font-semibold truncate ${isSelected ? "text-white" : "text-slate-200"}`}>
+                                        {voice.name}
+                                      </span>
+                                      {voice.grade ? (
+                                        <span
+                                          className={`shrink-0 rounded-md border px-1 py-px text-[9px] font-bold leading-none tracking-wide ${gradeBadgeClass(voice.grade)}`}
+                                          title="Nota da qualidade dos dados de treino (hexgrad)"
+                                        >
+                                          {voice.grade}
+                                        </span>
+                                      ) : voice.locale === "pt-br" ? (
+                                        <span
+                                          className="shrink-0 rounded-md border border-white/15 bg-white/5 px-1 py-px text-[9px] font-bold leading-none tracking-wide text-slate-400"
+                                          title="Sem nota oficial no VOICES.md"
+                                        >
+                                          PT
+                                        </span>
+                                      ) : null}
                                     </span>
                                     <span className="block text-[10px] text-slate-500 truncate leading-tight mt-0.5">
                                       {voice.description}

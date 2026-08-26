@@ -237,8 +237,37 @@ export function buildAtempoFilter(speed: number): string | null {
   return factors.map((f) => `atempo=${f}`).join(",");
 }
 
-function encodeAudioFilterArgs(speed?: number): string[] {
-  const filter = buildAtempoFilter(speed ?? 1);
+/** Mild speech clarity chain for 24 kHz TTS (highpass + presence + light de-ess + loudnorm). */
+export const NARRATION_CLARITY_FILTER =
+  "highpass=f=80," +
+  "equalizer=f=3000:t=q:w=1.2:g=2.5," +
+  "equalizer=f=5500:t=q:w=1.5:g=-1.5," +
+  "loudnorm=I=-16:TP=-1.5:LRA=11";
+
+/**
+ * Build ffmpeg `-af` chain for narration encode / PCM post-process.
+ * Clarity first, then optional atempo.
+ */
+export function buildNarrationAudioFilters(opts?: {
+  speed?: number;
+  clarity?: boolean;
+}): string | null {
+  const parts: string[] = [];
+  if (opts?.clarity !== false) {
+    parts.push(NARRATION_CLARITY_FILTER);
+  }
+  const atempo = buildAtempoFilter(opts?.speed ?? 1);
+  if (atempo) {
+    parts.push(atempo);
+  }
+  return parts.length > 0 ? parts.join(",") : null;
+}
+
+function encodeAudioFilterArgs(opts?: { speed?: number; clarity?: boolean }): string[] {
+  const filter = buildNarrationAudioFilters({
+    speed: opts?.speed ?? 1,
+    clarity: opts?.clarity,
+  });
 
   if (!filter) {
     return [];
@@ -247,27 +276,18 @@ function encodeAudioFilterArgs(speed?: number): string[] {
   return ["-af", filter];
 }
 
-/**
- * Time-stretch mono PCM s16le with ffmpeg `atempo`.
- * Returns the input buffer unchanged when speed is ~1.
- */
-export async function applyAtempoToPcm(opts: {
+async function applyAfFilterToPcm(opts: {
   pcm: Buffer;
   sampleRate: number;
-  speed: number;
+  filter: string;
+  errorLabel: string;
 }): Promise<Buffer> {
-  const filter = buildAtempoFilter(opts.speed);
-
-  if (!filter) {
-    return opts.pcm;
-  }
-
   if (!opts.pcm.length || opts.pcm.length % 2 !== 0) {
-    throw new Error("PCM16 inválido para ajuste de velocidade.");
+    throw new Error(`PCM16 inválido para ${opts.errorLabel}.`);
   }
 
   if (!Number.isInteger(opts.sampleRate) || opts.sampleRate < 8000) {
-    throw new Error(`Sample rate inválido para atempo: ${opts.sampleRate}.`);
+    throw new Error(`Sample rate inválido para ${opts.errorLabel}: ${opts.sampleRate}.`);
   }
 
   await ensureFfmpeg();
@@ -286,7 +306,7 @@ export async function applyAtempoToPcm(opts: {
       "-i",
       inPath,
       "-af",
-      filter,
+      opts.filter,
       "-f",
       "s16le",
       "-ar",
@@ -298,7 +318,7 @@ export async function applyAtempoToPcm(opts: {
     const out = await fs.promises.readFile(outPath);
 
     if (!out.length || out.length % 2 !== 0) {
-      throw new Error("Saída PCM inválida após atempo.");
+      throw new Error(`Saída PCM inválida após ${opts.errorLabel}.`);
     }
 
     return out;
@@ -306,6 +326,55 @@ export async function applyAtempoToPcm(opts: {
     await fs.promises.unlink(inPath).catch(() => undefined);
     await fs.promises.unlink(outPath).catch(() => undefined);
   }
+}
+
+/**
+ * Time-stretch mono PCM s16le with ffmpeg `atempo`.
+ * Returns the input buffer unchanged when speed is ~1.
+ */
+export async function applyAtempoToPcm(opts: {
+  pcm: Buffer;
+  sampleRate: number;
+  speed: number;
+}): Promise<Buffer> {
+  const filter = buildAtempoFilter(opts.speed);
+
+  if (!filter) {
+    return opts.pcm;
+  }
+
+  return applyAfFilterToPcm({
+    pcm: opts.pcm,
+    sampleRate: opts.sampleRate,
+    filter,
+    errorLabel: "atempo",
+  });
+}
+
+/**
+ * Apply narration clarity filters to mono PCM s16le.
+ * Returns the input unchanged when clarity is disabled.
+ */
+export async function applyClarityToPcm(opts: {
+  pcm: Buffer;
+  sampleRate: number;
+  clarity?: boolean;
+}): Promise<Buffer> {
+  if (opts.clarity === false) {
+    return opts.pcm;
+  }
+
+  const filter = buildNarrationAudioFilters({ clarity: true });
+  if (!filter) {
+    return opts.pcm;
+  }
+
+  return applyAfFilterToPcm({
+    pcm: opts.pcm,
+    sampleRate: opts.sampleRate,
+    filter,
+    errorLabel: "clareza",
+  });
 }
 
 /** Books/QuickTime treat extra JPEG tracks as video. Mux a single front cover. */
@@ -333,6 +402,8 @@ export async function pcmToMp3(opts: {
   sampleRate?: number;
   /** Playback speed multiplier (1 = normal). Applied with ffmpeg atempo. */
   speed?: number;
+  /** Mild EQ + loudnorm for clearer speech. Default true. */
+  clarity?: boolean;
   onProgress?: (p: FfmpegProgress) => void;
   signal?: AbortSignal;
 }): Promise<string> {
@@ -343,7 +414,7 @@ export async function pcmToMp3(opts: {
   const pcmSec = await pcmDurationSeconds(opts.pcmPath, sampleRate);
   const totalSec = pcmSec / speed;
 
-  // Encode at the native TTS rate — optional atempo only (no loudness / EQ).
+  // Encode at the native TTS rate — clarity (EQ/loudnorm) + optional atempo.
   await runFfmpeg(
     [
       "-f",
@@ -354,7 +425,7 @@ export async function pcmToMp3(opts: {
       "1",
       "-i",
       opts.pcmPath,
-      ...encodeAudioFilterArgs(speed),
+      ...encodeAudioFilterArgs({ speed, clarity: opts.clarity }),
       "-ac",
       "1",
       "-ar",
@@ -380,6 +451,8 @@ export async function pcmToM4b(opts: {
   sampleRate?: number;
   /** Playback speed multiplier (1 = normal). Applied with ffmpeg atempo. */
   speed?: number;
+  /** Mild EQ + loudnorm for clearer speech. Default true. */
+  clarity?: boolean;
   artworkPaths?: string[];
   title?: string;
   onProgress?: (p: FfmpegProgress) => void;
@@ -406,8 +479,8 @@ export async function pcmToM4b(opts: {
 
   args.push("-map", "0:a");
   for (let i = 0; i < artworks.length; i++) args.push("-map", `${i + 1}:v`);
-  // Encode at the native TTS rate — optional atempo only (no loudness / EQ).
-  args.push(...encodeAudioFilterArgs(speed));
+  // Encode at the native TTS rate — clarity (EQ/loudnorm) + optional atempo.
+  args.push(...encodeAudioFilterArgs({ speed, clarity: opts.clarity }));
   args.push(
     "-ac",
     "1",

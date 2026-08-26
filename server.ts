@@ -52,6 +52,7 @@ import {
   m4bToMp3AndCover,
   mp3ToM4b,
   applyAtempoToPcm,
+  applyClarityToPcm,
   pcmToM4b,
   pcmToMp3,
 } from "./mediaConvert";
@@ -138,9 +139,9 @@ const TTS_INSTRUCT =
 /** Qwen3-TTS official / mlx-audio default sampling temperature. Override with QWEN_TTS_TEMPERATURE. */
 const TTS_TEMPERATURE = Number(process.env.QWEN_TTS_TEMPERATURE ?? "0.9");
 const TTS_LANGUAGE = process.env.QWEN_TTS_LANGUAGE || "Auto";
-/** Bump when preview text, instruct, or ICL scheme changes so old disk samples and chunk caches are ignored. */
+/** Bump when preview text, instruct, ICL scheme, or clarity filters change so old disk samples and chunk caches are ignored. */
 const VOICE_PREVIEW_CACHE_VERSION =
-  process.env.QWEN_TTS_PREVIEW_CACHE_VERSION || "1.7b-narrate-v1";
+  process.env.QWEN_TTS_PREVIEW_CACHE_VERSION || "1.7b-narrate-v2-clarity";
 
 let ttsChild: ChildProcess | null = null;
 let ttsStartPromise: Promise<void> | null = null;
@@ -2232,6 +2233,8 @@ async function ensureVoicePreview(
       speed: narrationSpeed,
     });
   }
+
+  pcm = await applyClarityToPcm({ pcm, sampleRate });
 
   const samples = trimTrailingSilence(
     new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 2)),
