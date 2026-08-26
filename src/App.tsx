@@ -3186,7 +3186,7 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
                             {gender}
                           </p>
                           <div
-                            className="grid grid-cols-1 sm:grid-cols-2 gap-1.5"
+                            className="grid grid-cols-1 gap-1.5"
                             role="radiogroup"
                             aria-label={`Vozes ${gender.toLowerCase()}s`}
                           >

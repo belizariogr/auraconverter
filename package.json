@@ -32,6 +32,7 @@
     "prepare:linux:cpu": "node scripts/prepare-app-resources.cjs --platform=linux --accel=cpu",
     "dist": "node scripts/dist.cjs",
     "dist:mac": "rm -rf release && bun run build:app && node scripts/ensure-electron.cjs && bun run prepare:mac && ELECTRON_CACHE=build/cache/electron ELECTRON_BUILDER_CACHE=build/cache/electron-builder electron_config_cache=build/cache/electron electron-builder --mac --arm64",
+    "install:mac": "bash scripts/install-mac-app.sh",
     "dist:win": "bun run build:app && node scripts/ensure-electron.cjs && bun run prepare:win && electron-builder --win --x64 -c.artifactName=AuraReader-cuda-${version}-${arch}.${ext}",
     "dist:win:rocm": "bun run build:app && node scripts/ensure-electron.cjs && bun run prepare:win:rocm && electron-builder --win --x64 -c.artifactName=AuraReader-rocm-${version}-${arch}.${ext}",
     "dist:win:cpu": "bun run build:app && node scripts/ensure-electron.cjs && bun run prepare:win:cpu && electron-builder --win --x64 -c.artifactName=AuraReader-cpu-${version}-${arch}.${ext}",
