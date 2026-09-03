@@ -169,6 +169,7 @@ When the user requests a durable behavior change, record it here or in the relev
 - Per-book `narrationLanguage` (BCP-47 or `auto`): persist with document state; last used also in `localStorage` so new books start with that language (else OS locale); send to Qwen (`lang_code` names) and Kokoro (MLX letter / ONNX `en-us` style) via `/tts` `language`
 - Global `narrationSpeed` (0.75–1.5×, default 1): UI slider; persist only in `localStorage` (not per document); same speed for every book; load on app open; applied **once** — Qwen via sped preview WAV used as ICL anchor; Kokoro via native `/tts` `speed`. Do **not** also apply encode-time `atempo` (would double-accelerate). Fingerprint includes speed.
 - Global voice per TTS engine in `localStorage` (`aura-reader-voice-by-engine`); load on app open; same voice for every book (not stored on the document)
+- Breeze voices use predefined natural-language prompts, editable per voice in `localStorage` (`aura-reader-voice-prompts`); each generated preview becomes the voice reference for narration.
 - Qwen `pt-BR`: steer Brazilian accent via strong `qwenInstruct` + BR lexical preview/ICL text (`você`/`celular`/`ônibus`); bump `QWEN_TTS_PREVIEW_CACHE_VERSION` (current default `1.7b-narrate-v1`) when preview copy, delivery style, or model size changes. ICL narration ignores `instruct` — accent and tone live in the preview WAV. Instruct must request normal volume + light emotion (not whisper / not flat).
 - Qwen MLX default models: **1.7B 8-bit** Base + CustomVoice (`mlx-community/Qwen3-TTS-12Hz-1.7B-*-8bit`). Torch: `Qwen/Qwen3-TTS-12Hz-1.7B-*`.
 - Qwen previews: CustomVoice generates each speaker preset at runtime into `AURA_DATA_DIR/assets/voice-previews/` (never git / never bundled); Base ICL clones that WAV at narration time — both models should be installed
@@ -186,7 +187,7 @@ Parents first; leafs with durable contracts sit under each parent.
 
 ### TTS
 
-- `.dox/qwen3-tts-apple-silicon/AGENTS.md` — `qwen3-tts-apple-silicon/` (Qwen MLX FastAPI)
+- `.dox/mlx/AGENTS.md` — `mlx/` (Breeze TTS 2 MLX, servidor e inferência)
 - `.dox/tts/AGENTS.md` — `tts/` (Kokoro MLX/ONNX, Torch Qwen)
 - `.dox/tts/kokoro/AGENTS.md` — `tts/kokoro/`
 - `.dox/tts/torch/AGENTS.md` — `tts/torch/`

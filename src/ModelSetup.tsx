@@ -638,7 +638,7 @@ export default function ModelSetup({
             <div>
               <h2 className="text-xl font-bold text-white mb-1">Motor de voz</h2>
               <p className="text-sm text-slate-300 leading-relaxed">
-                Escolha Qwen3 (qualidade / clonagem) ou Kokoro (rápido e leve). A instalação
+                Escolha Breeze TTS 2 (qualidade / direção de voz) ou Kokoro (rápido e leve). A instalação
                 prepara o runtime Python e baixa só os arquivos necessários (~
                 {formatBytes(
                   approxTotal ||
@@ -654,10 +654,10 @@ export default function ModelSetup({
               [
                 {
                   id: "qwen3" as const,
-                  title: engines?.qwen3?.label || "Qwen3-TTS",
+                  title: engines?.qwen3?.label || "Breeze TTS 2",
                   desc:
                     engines?.qwen3?.description ||
-                    "Alta qualidade com clonagem de voz (ICL).",
+                    "Vozes criadas por prompt, com clonagem da referência gerada.",
                   ready: engines?.qwen3?.ready,
                 },
                 {

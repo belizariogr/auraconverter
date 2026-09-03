@@ -224,7 +224,7 @@ function resolveKokoroLaunch(): {
   const kokoroBackend = readKokoroBackend(AURA_DATA_DIR);
 
   if (kokoroBackend === "mlx" && process.platform === "darwin") {
-    const mlxDir = path.join(AURA_ROOT, "qwen3-tts-apple-silicon");
+    const mlxDir = path.join(AURA_ROOT, "mlx");
     const sitePackages = path.join(mlxDir, "site-packages");
     const scriptName = "tts_server_mlx.py";
     if (!fs.existsSync(path.join(ttsDir, scriptName))) {
@@ -365,17 +365,15 @@ function resolveQwenLaunch(): {
   const useTorch = process.platform === "win32" || process.platform === "linux";
   const ttsDir = useTorch
     ? path.join(AURA_ROOT, "tts", "torch")
-    : path.join(AURA_ROOT, "qwen3-tts-apple-silicon");
+    : path.join(AURA_ROOT, "mlx");
   const sitePackages = path.join(ttsDir, "site-packages");
 
   const baseEnv: NodeJS.ProcessEnv = {
     ...process.env,
-    QWEN_TTS_PORT: String(TTS_PORT),
+    BREEZE_TTS_PORT: String(TTS_PORT),
     TTS_PORT: String(TTS_PORT),
-    QWEN_TTS_PRELOAD: process.env.QWEN_TTS_PRELOAD ?? "0",
-    QWEN_TTS_PREVIEW_CACHE_VERSION: VOICE_PREVIEW_CACHE_VERSION,
-    VOICE_PREVIEW_DIR: previewDir,
-    QWEN_TTS_MODELS_DIR: modelsDir,
+    BREEZE_TTS_PRELOAD: process.env.BREEZE_TTS_PRELOAD ?? "0",
+    BREEZE_TTS_MODELS_DIR: modelsDir,
     ...(accel === "rocm" ? rocmSpawnEnv() : {}),
   };
 
@@ -454,7 +452,7 @@ function resolveQwenLaunch(): {
   }
 
   throw new Error(
-    `Qwen TTS runtime não encontrado em ${ttsDir} (site-packages ou .venv).`
+    `Breeze TTS runtime não encontrado em ${ttsDir} (site-packages ou .venv).`
   );
 }
 
@@ -566,7 +564,7 @@ async function ensureTtsRunning(timeoutMs = 90_000): Promise<void> {
     }
 
     const launch = resolveTtsLaunch(engine);
-    const label = engine === "kokoro" ? "Kokoro" : "Qwen3";
+    const label = engine === "kokoro" ? "Kokoro" : "Breeze TTS 2";
 
     if (!ttsChild || ttsChild.killed || ttsChild.exitCode !== null) {
       console.log(`[TTS] Starting ${label} TTS lazily on port ${TTS_PORT}...`);
@@ -1283,7 +1281,7 @@ function textContentToPlainText(textContent: {
 
 function resolveTextRepairPython(): TextRepairPython | null {
   if (process.platform === "darwin") {
-    const mlxDir = path.join(AURA_ROOT, "qwen3-tts-apple-silicon");
+    const mlxDir = path.join(AURA_ROOT, "mlx");
     const sitePackages = path.join(mlxDir, "site-packages");
     const bundled = resolveBundledPython(AURA_ROOT);
     if (bundled && fs.existsSync(sitePackages)) {
@@ -2039,13 +2037,15 @@ function voicePreviewSafeKey(voiceKey: string): string {
 function voicePreviewFileKey(
   voiceName: string,
   languageId: string,
-  speed: number = 1
+  speed: number = 1,
+  prompt = ""
 ): string {
   const voice = voicePreviewSafeKey(voiceName);
   const lang = voicePreviewSafeKey(voicePreviewCacheTag(languageId));
   const speedTag = narrationSpeedCacheTag(speed);
 
-  return `${voice}_${lang}_${speedTag}_${VOICE_PREVIEW_CACHE_VERSION}`;
+  const promptTag = createHash("sha1").update(prompt.trim()).digest("hex").slice(0, 10);
+  return `${voice}_${lang}_${speedTag}_${promptTag}_${VOICE_PREVIEW_CACHE_VERSION}`;
 }
 
 function voicePreviewWavPath(fileKey: string): string {
@@ -2133,9 +2133,10 @@ async function saveVoicePreviewToDisk(
 async function deleteVoicePreviewFiles(
   voiceName: string,
   languageId: string,
-  speed: number = 1
+  speed: number = 1,
+  prompt = ""
 ): Promise<{ deleted: boolean; fileKey: string }> {
-  const fileKey = voicePreviewFileKey(voiceName, languageId, speed);
+  const fileKey = voicePreviewFileKey(voiceName, languageId, speed, prompt);
   voicePreviewCache.delete(fileKey);
 
   let deleted = false;
@@ -2159,7 +2160,8 @@ async function deleteVoicePreviewFiles(
 async function ensureVoicePreview(
   voiceName: string,
   languageId: string,
-  speed: number = 1
+  speed: number = 1,
+  voicePrompt = ""
 ): Promise<{ refAudioPath: string; refText: string; created: boolean }> {
   const language = resolveNarrationLanguageId(languageId);
   const narrationSpeed = clampNarrationSpeed(speed);
@@ -2170,7 +2172,7 @@ async function ensureVoicePreview(
     engine,
     readKokoroBackend(AURA_DATA_DIR)
   );
-  const fileKey = voicePreviewFileKey(voiceName, language, narrationSpeed);
+  const fileKey = voicePreviewFileKey(voiceName, language, narrationSpeed, voicePrompt);
   const wavPath = voicePreviewWavPath(fileKey);
   const txtPath = voicePreviewTextPath(fileKey);
 
@@ -2213,7 +2215,7 @@ async function ensureVoicePreview(
     {
       skipIcl: true,
       language: ttsLanguage,
-      instruct: mergeQwenInstruct(language, TTS_INSTRUCT),
+      instruct: `${voicePrompt.trim()} ${mergeQwenInstruct(language, TTS_INSTRUCT)}`.trim(),
       // Kokoro applies speed natively; Qwen preview is time-stretched below.
       ...(engine === "kokoro" ? { speed: narrationSpeed } : {}),
     }
@@ -2261,7 +2263,8 @@ app.post("/api/voice-preview", async (req, res) => {
     const voiceName =
       String(req.body?.voiceName || "").trim() ||
       (engine === "kokoro" ? "af_heart" : "Vivian");
-    const fileKey = voicePreviewFileKey(voiceName, languageId, narrationSpeed);
+    const voicePrompt = String(req.body?.prompt || "").trim();
+    const fileKey = voicePreviewFileKey(voiceName, languageId, narrationSpeed, voicePrompt);
 
     const memCached = voicePreviewCache.get(fileKey);
     if (memCached) {
@@ -2297,7 +2300,7 @@ app.post("/api/voice-preview", async (req, res) => {
       });
     }
 
-    const anchor = await ensureVoicePreview(voiceName, languageId, narrationSpeed);
+    const anchor = await ensureVoicePreview(voiceName, languageId, narrationSpeed, voicePrompt);
     didGenerate = anchor.created;
     const audioData =
       voicePreviewCache.get(fileKey) ||
@@ -2336,6 +2339,7 @@ app.delete("/api/voice-preview", async (req, res) => {
     const languageId = resolveNarrationLanguageIdFromRequest(req.body?.language);
     const narrationSpeed = clampNarrationSpeed(req.body?.speed);
     const voiceName = String(req.body?.voiceName || "").trim();
+    const voicePrompt = String(req.body?.prompt || "").trim();
 
     if (!voiceName) {
       return res.status(400).json({ error: "O nome da voz é obrigatório." });
@@ -2344,7 +2348,8 @@ app.delete("/api/voice-preview", async (req, res) => {
     const { deleted, fileKey } = await deleteVoicePreviewFiles(
       voiceName,
       languageId,
-      narrationSpeed
+      narrationSpeed,
+      voicePrompt
     );
 
     return res.json({
@@ -2390,7 +2395,7 @@ app.post("/api/tts-engine", async (req, res) => {
     const hasBackend = nextBackend !== undefined && nextBackend !== null;
 
     if (hasEngine && !isTtsEngineId(nextEngine)) {
-      return res.status(400).json({ error: 'engine must be "qwen3" or "kokoro"' });
+      return res.status(400).json({ error: "O motor deve ser Breeze TTS 2 ou Kokoro." });
     }
     if (hasDevice && !isKokoroDeviceId(nextDevice)) {
       return res.status(400).json({ error: 'kokoroDevice must be "cpu" or "gpu"' });
@@ -2981,6 +2986,7 @@ app.post("/api/narrate-stream", async (req, res) => {
       startPage,
       endPage,
       voiceName,
+      voicePrompt: reqVoicePrompt,
       taskId: reqTaskId,
       text: providedText,
       pagesNarrated: providedPagesLabel,
@@ -3003,6 +3009,7 @@ app.post("/api/narrate-stream", async (req, res) => {
     const activeData = fileData || pdfData;
     const type = (fileType || "pdf") as "pdf" | "epub";
     const voice = voiceName || "Vivian";
+    const voicePrompt = typeof reqVoicePrompt === "string" ? reqVoicePrompt.trim() : "";
     const engine = activeTtsEngine();
     const languageId = resolveNarrationLanguageIdFromRequest(reqLanguage);
     const ttsLanguage = resolveNarrationLanguagePayload(reqLanguage);
@@ -3132,7 +3139,7 @@ app.post("/api/narrate-stream", async (req, res) => {
         message: "Preparando âncora de voz (prévia) para tom consistente...",
       });
       try {
-        voiceAnchor = await ensureVoicePreview(voice, languageId, narrationSpeed);
+        voiceAnchor = await ensureVoicePreview(voice, languageId, narrationSpeed, voicePrompt);
         console.log(`[NarrateStream] Voice anchor: ${voiceAnchor.refAudioPath}`);
       } catch (anchorErr: any) {
         sendEvent({
@@ -3642,7 +3649,7 @@ app.post("/api/narrate-stream", async (req, res) => {
 // Original endpoint kept for backwards compatibility / fallback
 app.post("/api/narrate", async (req, res) => {
   try {
-    const { pdfData, startPage, endPage, voiceName, language: reqLanguage } = req.body;
+    const { pdfData, startPage, endPage, voiceName, voicePrompt: reqVoicePrompt, language: reqLanguage } = req.body;
 
     if (!pdfData) {
       return res.status(400).json({ error: "O arquivo PDF é obrigatório." });
@@ -3650,6 +3657,7 @@ app.post("/api/narrate", async (req, res) => {
 
     const { start, end } = parsePageRange(startPage, endPage);
     const voice = voiceName || "Vivian";
+    const voicePrompt = typeof reqVoicePrompt === "string" ? reqVoicePrompt.trim() : "";
     const languageId = resolveNarrationLanguageIdFromRequest(reqLanguage);
     const ttsLanguage = resolveNarrationLanguagePayload(reqLanguage);
 
@@ -3669,7 +3677,7 @@ app.post("/api/narrate", async (req, res) => {
     const textChunks = splitTextIntoChunks(extractedText, engine);
     let voiceAnchor: { refAudioPath: string; refText: string } | null = null;
     if (engine === "qwen3") {
-      voiceAnchor = await ensureVoicePreview(voice, languageId, narrationSpeed);
+      voiceAnchor = await ensureVoicePreview(voice, languageId, narrationSpeed, voicePrompt);
     }
 
     ensureNarrationTmpDir();

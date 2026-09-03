@@ -59,6 +59,7 @@ interface Voice {
   grade?: string;
   /** Voice language family for prioritization. */
   locale?: "en-us" | "en-gb" | "pt-br" | string;
+  prompt?: string;
 }
 
 function voiceGradeSortKey(grade: string | undefined): number {
@@ -212,8 +213,21 @@ const FALLBACK_QWEN_VOICES: Voice[] = [
   { id: "Uncle_Fu", name: "Uncle Fu", gender: "Masculino", description: "Timbre maduro e pausado.", icon: "🧓" },
 ];
 
+const DEFAULT_VOICE_PROMPTS: Record<string, string> = {
+  Vivian: "A warm, clear young woman with a calm and intimate audiobook delivery.",
+  Serena: "A gentle woman with a soft, reassuring voice and patient audiobook delivery.",
+  Sohee: "An expressive woman with bright diction and subtle emotional nuance.",
+  Ono_Anna: "A confident woman with precise diction and a natural conversational rhythm.",
+  Ryan: "A calm man with a steady, warm low register suited to long audiobook chapters.",
+  Aiden: "An engaging man with friendly energy and a clear storytelling voice.",
+  Eric: "A mature man with formal diction, composed pacing, and quiet authority.",
+  Dylan: "A grounded man with a rich, measured voice and restrained emotion.",
+  Uncle_Fu: "A mature man with a deep, patient, grandfatherly storytelling voice.",
+};
+
 const VOICE_STORAGE_KEY = "aura-reader-voice";
 const ENGINE_VOICE_STORAGE_KEY = "aura-reader-voice-by-engine";
+const VOICE_PROMPT_STORAGE_KEY = "aura-reader-voice-prompts";
 const LANGUAGE_STORAGE_KEY = "aura-reader-narration-language";
 const SPEED_STORAGE_KEY = "aura-reader-narration-speed";
 const DOCS_DB_NAME = "aura-reader";
@@ -315,6 +329,24 @@ function persistVoice(engine: string, voiceId: string) {
     ) as Record<string, string>;
     byEngine[engine] = voiceId;
     localStorage.setItem(ENGINE_VOICE_STORAGE_KEY, JSON.stringify(byEngine));
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
+function loadVoicePrompts(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(VOICE_PROMPT_STORAGE_KEY) || "{}") as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function persistVoicePrompt(voiceId: string, prompt: string): void {
+  try {
+    const prompts = loadVoicePrompts();
+    prompts[voiceId] = prompt;
+    localStorage.setItem(VOICE_PROMPT_STORAGE_KEY, JSON.stringify(prompts));
   } catch {
     // ignore quota / private mode
   }
@@ -596,6 +628,11 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
   const [selectedVoice, setSelectedVoice] = useState<string>(
     () => peekSavedVoiceId("qwen3") || peekSavedVoiceId("kokoro") || "Vivian"
   );
+  const [voicePrompts, setVoicePrompts] = useState<Record<string, string>>(() =>
+    loadVoicePrompts()
+  );
+  const selectedVoicePrompt =
+    voicePrompts[selectedVoice] ?? DEFAULT_VOICE_PROMPTS[selectedVoice] ?? "";
   const [narrationSpeed, setNarrationSpeed] = useState<number>(() =>
     loadSavedNarrationSpeed()
   );
@@ -1461,6 +1498,12 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
     persistVoice(ttsEngineRef.current, voiceId);
   };
 
+  const updateSelectedVoicePrompt = (prompt: string) => {
+    setVoicePrompts((current) => ({ ...current, [selectedVoice]: prompt }));
+    persistVoicePrompt(selectedVoice, prompt);
+    previewCacheRef.current = {};
+  };
+
   const handleClearAllFiles = () => {
     setDocuments((prev) => {
       for (const doc of prev) {
@@ -1667,6 +1710,9 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
     stopVoicePreview();
   }, [previewLanguageId, previewSpeed]);
 
+  const promptForVoice = (voiceId: string): string =>
+    voicePrompts[voiceId] ?? DEFAULT_VOICE_PROMPTS[voiceId] ?? "";
+
   const playVoicePreview = async (
     voiceId: string,
     opts?: { forceRegenerate?: boolean }
@@ -1681,7 +1727,8 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
 
     stopVoicePreview();
 
-    const cacheKey = `${voiceId}::${previewLanguageId}::${previewSpeed}`;
+    const prompt = promptForVoice(voiceId);
+    const cacheKey = `${voiceId}::${previewLanguageId}::${previewSpeed}::${prompt}`;
     const requestId = ++previewRequestIdRef.current;
     let url = opts?.forceRegenerate ? undefined : previewCacheRef.current[cacheKey];
     if (!url) {
@@ -1694,6 +1741,7 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
             voiceName: voiceId,
             language: previewLanguageId,
             speed: previewSpeed,
+            prompt,
           }),
         });
         const payload = await response.json();
@@ -1754,7 +1802,8 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
     setPreviewError(null);
     stopVoicePreview();
 
-    const cacheKey = `${voiceId}::${previewLanguageId}::${previewSpeed}`;
+    const prompt = promptForVoice(voiceId);
+    const cacheKey = `${voiceId}::${previewLanguageId}::${previewSpeed}::${prompt}`;
     setPreviewDeletingVoice(voiceId);
 
     try {
@@ -1765,6 +1814,7 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
           voiceName: voiceId,
           language: previewLanguageId,
           speed: previewSpeed,
+          prompt,
         }),
       });
       const payload = await response.json();
@@ -1839,6 +1889,7 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
       body: JSON.stringify({
         text,
         voiceName: selectedVoice,
+        voicePrompt: selectedVoicePrompt,
         taskId,
         docId: doc.id,
         pagesNarrated: doc.pagesNarrated,
@@ -3157,7 +3208,7 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
                       ? `Kokoro (${kokoroBackend === "mlx" ? "MLX" : "ONNX fp32"} · ${
                           kokoroDevice === "gpu" ? "GPU" : "CPU"
                         }). Voz e velocidade valem para todos os livros. A prévia fala no idioma do livro ativo (${previewLanguage.label}). Passe o mouse na voz e use ↺ para excluir a prévia salva e gerar outra.`
-                      : `Motor Qwen3. Voz e velocidade valem para todos os livros. A prévia em ${previewLanguage.label} (na velocidade escolhida) vira a referência de voz da narração. Passe o mouse na voz e use ↺ para excluir a prévia salva e gerar outra.`}
+                      : `Motor Breeze TTS 2. Voz e velocidade valem para todos os livros. A prévia em ${previewLanguage.label} (na velocidade escolhida) é criada pelo prompt e vira a referência de voz da narração. Passe o mouse na voz e use ↺ para excluir a prévia salva e gerar outra.`}
                   </p>
 
                   {previewError && (
@@ -3174,6 +3225,25 @@ export default function App({ onManageModels }: { onManageModels?: () => void })
                       disabled={loading}
                     />
                   </div>
+
+                  {ttsEngine !== "kokoro" && (
+                    <div className="mb-5 rounded-xl border border-blue-500/20 bg-blue-500/5 p-3">
+                      <label className="block text-xs font-semibold text-slate-200 mb-1.5" htmlFor="voice-prompt">
+                        Prompt da voz
+                      </label>
+                      <textarea
+                        id="voice-prompt"
+                        value={selectedVoicePrompt}
+                        onChange={(event) => updateSelectedVoicePrompt(event.target.value)}
+                        rows={3}
+                        className="w-full resize-y rounded-lg border border-white/10 bg-slate-950/50 px-2.5 py-2 text-xs text-slate-200 outline-none focus:border-blue-400/60"
+                        placeholder="Descreva timbre, idade, energia e estilo de narração…"
+                      />
+                      <p className="mt-1.5 text-[10px] text-slate-500">
+                        A prévia é gerada com este prompt e vira a referência usada em todos os capítulos. Clique em ↺ para regenerar depois de editar.
+                      </p>
+                    </div>
+                  )}
 
                   <div className="space-y-4">
                     {(["Feminino", "Masculino"] as const).map((gender) => {

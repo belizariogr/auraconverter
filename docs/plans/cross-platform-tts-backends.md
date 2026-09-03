@@ -29,7 +29,7 @@ todos:
 
 ## Restrição real
 
-- **macOS Apple Silicon:** continua com MLX em [`qwen3-tts-apple-silicon/`](../../qwen3-tts-apple-silicon/) (já funciona).
+- **macOS Apple Silicon:** continua com MLX em [`mlx/`](../../mlx/) (já funciona).
 - **Windows / Linux:** MLX não roda. Novo backend com o pacote oficial [`qwen-tts`](https://github.com/QwenLM/Qwen3-TTS) + PyTorch, expondo **a mesma API** (`/health`, `/tts`, `/tts/cancel`, `/tts/unload`) que o Express já usa.
 - **GPU no Win/Linux:** PyTorch com wheels distintos — **NVIDIA (CUDA)**, **AMD (ROCm/HIP)** ou **CPU**. Não dá para misturar CUDA e ROCm no mesmo `site-packages`.
 - Builds nativos (site-packages com `torch`/`mlx`) **só podem ser gerados na plataforma alvo** (ou CI multi-OS + variantes de acelerador). No Mac dava para gerar `.exe`/AppImage do Electron, mas não um `torch` Windows/Linux válido.
@@ -102,14 +102,14 @@ Referência de community builds (ex. Qwen3-TTS-AMD) e docs ROCm Radeon:
 - `TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1`
 - opcional: `MIOPEN_GEMM_ENFORCE_BACKEND=hipblaslt` (performance; validar estabilidade)
 
-Manter o MLX atual; opcionalmente mover/alias para `tts/mlx/` apontando para o código atual de [`qwen3-tts-apple-silicon/tts_server.py`](../../qwen3-tts-apple-silicon/tts_server.py) para organizar, sem quebrar caminhos existentes no Mac.
+Manter o MLX atual; opcionalmente mover/alias para `tts/mlx/` apontando para o código atual de [`mlx/tts_server.py`](../../mlx/tts_server.py) para organizar, sem quebrar caminhos existentes no Mac.
 
 ## 2. Seleção de backend no app Node
 
 Em [`server.ts`](../../server.ts) / [`electron/main.cjs`](../../electron/main.cjs):
 
 - Resolver TTS por `process.platform`:
-  - `darwin` → `qwen3-tts-apple-silicon` (MLX) + `Python.framework`
+  - `darwin` → `mlx` (MLX) + `Python.framework`
   - `win32` / `linux` → `tts/torch` + Python embutido daquele OS + `site-packages` (já vindos com a variante cuda/rocm/cpu empacotada)
 - Env comuns: `QWEN_TTS_MODELS_DIR`, `VOICE_PREVIEW_DIR`, `AURA_ROOT`, `AURA_DATA_DIR`.
 - Em Win/Linux com build ROCm: passar as env AMD acima ao spawn do Python.

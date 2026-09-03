@@ -50,7 +50,7 @@ function hasTorchRuntime(dir) {
 }
 
 function hasMlxRuntime(dir) {
-  const mlxDir = path.join(dir, "qwen3-tts-apple-silicon");
+  const mlxDir = path.join(dir, "mlx");
   if (!fs.existsSync(path.join(mlxDir, "tts_server.py"))) return false;
   return (
     fs.existsSync(path.join(mlxDir, "site-packages")) ||
@@ -74,7 +74,7 @@ function hasProjectRoot(dir) {
   if (!fs.existsSync(path.join(dir, "electron", "main.cjs"))) return false;
   if (process.platform === "darwin") {
     return fs.existsSync(
-      path.join(dir, "qwen3-tts-apple-silicon", "tts_server.py")
+      path.join(dir, "mlx", "tts_server.py")
     );
   }
   return fs.existsSync(path.join(dir, "tts", "torch", "tts_server.py"));
@@ -121,7 +121,7 @@ function resolveAuraRoot() {
     `Pasta do projeto Aura Converter não encontrada em:\n${fromMain}\n\n` +
       `Esperado: package.json + electron/main.cjs + ` +
       (process.platform === "darwin"
-        ? "qwen3-tts-apple-silicon/tts_server.py"
+        ? "mlx/tts_server.py"
         : "tts/torch/tts_server.py")
   );
 }

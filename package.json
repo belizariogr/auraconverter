@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "bun run scripts/start.ts",
     "start": "bun run scripts/start.ts",
-    "start:tts": "cd qwen3-tts-apple-silicon && .venv/bin/python tts_server.py",
+    "start:tts": "cd mlx && .venv/bin/python tts_server.py",
     "setup:tts": "node scripts/setup-torch-tts.cjs",
     "setup:tts:rocm": "node scripts/setup-torch-tts.cjs --accel=rocm",
     "setup:tts:cuda": "node scripts/setup-torch-tts.cjs --accel=cuda",
@@ -16,7 +16,7 @@
     "setup:tts:kokoro": "node scripts/setup-kokoro-tts.cjs",
     "start:tts:torch": "cd tts/torch && (.venv/bin/python tts_server.py 2>/dev/null || .venv/Scripts/python.exe tts_server.py)",
     "start:tts:kokoro": "cd tts/kokoro && (.venv/bin/python tts_server.py 2>/dev/null || .venv/Scripts/python.exe tts_server.py)",
-    "start:tts:kokoro:mlx": "cd tts/kokoro && ../../qwen3-tts-apple-silicon/.venv/bin/python tts_server_mlx.py",
+    "start:tts:kokoro:mlx": "cd tts/kokoro && ../../mlx/.venv/bin/python tts_server_mlx.py",
     "start:app": "bun run server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "build:app": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --external:vite --external:@napi-rs/canvas --external:@napi-rs/canvas-* --external:pdfjs-dist --sourcemap --outfile=dist/server.cjs",

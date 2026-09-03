@@ -1,6 +1,6 @@
 # Aura Converter
 
-Narrador de PDF/EPUB para **MP3** ou **M4B**. Extração de texto 100% local (pdf.js / epub2); síntese de voz com **Qwen3-TTS** local via MLX (`qwen3-tts-apple-silicon/`, modelos Pro **1.7B 8-bit**).
+Narrador de PDF/EPUB para **MP3** ou **M4B**. Extração de texto 100% local (pdf.js / epub2); síntese de voz com **Qwen3-TTS** local via MLX (`mlx/`, modelos Pro **1.7B 8-bit**).
 
 ## Modos do app
 
@@ -24,14 +24,14 @@ Na narração:
 
 - [Bun](https://bun.sh)
 - macOS Apple Silicon (M1/M2/M3/M4)
-- Python 3.12+ com o venv em `qwen3-tts-apple-silicon/.venv`
-- Modelo **Base** 1.7B 8-bit (recomendado, ICL) e CustomVoice 1.7B 8-bit em `qwen3-tts-apple-silicon/models/`
+- Python 3.12+ com o venv em `mlx/.venv`
+- Modelo **Base** 1.7B 8-bit (recomendado, ICL) e CustomVoice 1.7B 8-bit em `mlx/models/`
 - `ffmpeg` — embutido no pacote Electron (`dist:*`); em desenvolvimento: `brew install ffmpeg` (ou rode `prepare:mac` para baixar em `build/app-resources/bin`)
 
 ## Setup do TTS (uma vez)
 
 ```bash
-cd qwen3-tts-apple-silicon
+cd mlx
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt fastapi 'uvicorn[standard]'

@@ -1,6 +1,6 @@
 # TTS backend — MLX (macOS Apple Silicon)
 
-O runtime MLX permanece em [`qwen3-tts-apple-silicon/`](../../qwen3-tts-apple-silicon/) (`tts_server.py` + venv/`site-packages`).
+O runtime MLX permanece em [`mlx/`](../../mlx/) (`tts_server.py` + venv/`site-packages`).
 
 O app Node seleciona esse caminho automaticamente em `process.platform === "darwin"`.
 

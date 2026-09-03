@@ -1,5 +1,5 @@
 /**
- * Create qwen3-tts-apple-silicon/.venv with portable CPython 3.12 + MLX.
+ * Create mlx/.venv with portable CPython 3.12 + MLX.
  * Python tarball, pip cache and temp files stay under build/cache/.
  *
  *   bun run setup:tts:mlx
@@ -12,7 +12,7 @@ const http = require("http");
 const { execFileSync, spawnSync } = require("child_process");
 
 const root = path.resolve(__dirname, "..");
-const mlxSrc = path.join(root, "qwen3-tts-apple-silicon");
+const mlxSrc = path.join(root, "mlx");
 const cacheDir = path.join(root, "build", "cache");
 
 const PBS_TAG = "20260303";
@@ -163,10 +163,10 @@ async function main() {
   console.log("[setup-mlx-tts] platform=darwin accel=mlx");
 
   if (!fs.existsSync(path.join(mlxSrc, "tts_server.py"))) {
-    throw new Error("qwen3-tts-apple-silicon/tts_server.py missing");
+    throw new Error("mlx/tts_server.py missing");
   }
   if (!fs.existsSync(path.join(mlxSrc, "requirements.txt"))) {
-    throw new Error("qwen3-tts-apple-silicon/requirements.txt missing");
+    throw new Error("mlx/requirements.txt missing");
   }
 
   const existing = venvPython();
@@ -200,8 +200,8 @@ async function main() {
     { stdio: "inherit", cwd: mlxSrc, env: projectCacheEnv() }
   );
 
-  console.log("\n[setup-mlx-tts] Done. Python lives under qwen3-tts-apple-silicon/.venv");
-  console.log(`[setup-mlx-tts] Smoke: ${py} qwen3-tts-apple-silicon/tts_server.py`);
+  console.log("\n[setup-mlx-tts] Done. Python lives under mlx/.venv");
+  console.log(`[setup-mlx-tts] Smoke: ${py} mlx/tts_server.py`);
 }
 
 main().catch((err) => {

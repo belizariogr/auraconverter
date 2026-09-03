@@ -16,6 +16,7 @@ React UI (`vite`) for Aura Converter: document queue, voice/engine setup, narrat
 - User-visible strings in pt-BR.
 - Output format `mp3` | `m4b`; cover export is opt-in per document (`exportCover`).
 - Persist global `voice` (per engine) and `narrationSpeed` in `localStorage`; load both on app open; apply the same values to every document (never store speed/voice on the document or IndexedDB session).
+- For Breeze, persist a custom narrator prompt per voice in `localStorage`; the edited prompt must be sent both to voice preview generation and to narration. The generated preview is the narration reference audio.
 - Voice: hydrate from `localStorage` after `/api/tts-engine` returns the active engine + catalog; persist **only** when the user selects a voice — never on mount/hydrate (avoids overwriting the saved id with the first catalog entry).
 - Persist last-used `narrationLanguage` in `localStorage` for new documents; also keep `narrationLanguage` per document in IndexedDB session restore (language stays per-book).
 - Voice preview POST/DELETE `/api/voice-preview` sends `{ voiceName, language, speed }`; disk key is voice+locale+speed under `AURA_DATA_DIR/assets/voice-previews/` (gitignored, not packaged). Qwen: TTS@1× then `atempo`, saved WAV is the ICL anchor. Kokoro: native `speed` on `/tts`. Speed is applied only there — encode must not atempo again.

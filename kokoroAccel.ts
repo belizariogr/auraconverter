@@ -92,7 +92,7 @@ function amdGpuHint(missing: string[]): string {
 
 function mlxPython(auraRoot: string): string | null {
   const candidates = [
-    path.join(auraRoot, "qwen3-tts-apple-silicon", ".venv", "bin", "python"),
+    path.join(auraRoot, "mlx", ".venv", "bin", "python"),
     path.join(auraRoot, "python", "bin", "python3.12"),
     path.join(auraRoot, "python", "bin", "python3"),
     path.join(
@@ -114,7 +114,7 @@ function mlxPython(auraRoot: string): string | null {
 function probeMlxReady(auraRoot: string): boolean {
   const py = mlxPython(auraRoot);
   if (!py) {
-    const site = path.join(auraRoot, "qwen3-tts-apple-silicon", "site-packages");
+    const site = path.join(auraRoot, "mlx", "site-packages");
     return (
       fs.existsSync(path.join(site, "mlx")) &&
       fs.existsSync(path.join(site, "mlx_audio")) &&
@@ -122,7 +122,7 @@ function probeMlxReady(auraRoot: string): boolean {
     );
   }
   try {
-    const site = path.join(auraRoot, "qwen3-tts-apple-silicon", "site-packages");
+    const site = path.join(auraRoot, "mlx", "site-packages");
     const env = { ...process.env } as NodeJS.ProcessEnv;
     if (fs.existsSync(site)) {
       env.PYTHONPATH = site;

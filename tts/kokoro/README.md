@@ -20,7 +20,7 @@ bun run setup:tts:kokoro -- --force --accel=cuda   # NVIDIA
 bun run setup:tts:kokoro -- --force --accel=cpu
 
 # macOS — use o runtime MLX (já usado pelo Qwen3)
-cd qwen3-tts-apple-silicon && .venv/bin/pip install -r requirements.txt
+cd mlx && .venv/bin/pip install -r requirements.txt
 ```
 
 ## Modelos
@@ -34,7 +34,7 @@ Baixados pela UI:
 
 ```bash
 # macOS (MLX)
-qwen3-tts-apple-silicon/.venv/bin/python tts/kokoro/tts_server_mlx.py
+mlx/.venv/bin/python tts/kokoro/tts_server_mlx.py
 curl -s http://127.0.0.1:8765/health | jq .backend,.device
 
 # Windows / Linux (ONNX)

@@ -31,10 +31,10 @@ function hasPythonAt(...candidates: string[]): boolean {
 
 function hasMisakiMarker(auraRoot: string): boolean {
   const candidates = [
-    path.join(auraRoot, "qwen3-tts-apple-silicon", "site-packages", "misaki"),
+    path.join(auraRoot, "mlx", "site-packages", "misaki"),
     path.join(
       auraRoot,
-      "qwen3-tts-apple-silicon",
+      "mlx",
       ".venv",
       "lib",
       "python3.12",
@@ -75,7 +75,7 @@ export function isQwenTorchRuntimeReady(auraRoot: string): boolean {
 }
 
 export function isQwenMlxRuntimeReady(auraRoot: string): boolean {
-  const ttsDir = path.join(auraRoot, "qwen3-tts-apple-silicon");
+  const ttsDir = path.join(auraRoot, "mlx");
   if (!fs.existsSync(path.join(ttsDir, "tts_server.py"))) return false;
   if (fs.existsSync(path.join(ttsDir, "site-packages"))) return true;
   return hasPythonAt(path.join(ttsDir, ".venv", "bin", "python"));
@@ -90,8 +90,8 @@ export function isEngineRuntimeReady(
   if (engine === "kokoro") {
     return isKokoroRuntimeReady(auraRoot, platform, kokoroBackend);
   }
-  if (platform === "win32" || platform === "linux") {
-    return isQwenTorchRuntimeReady(auraRoot);
+  if (platform !== "darwin") {
+    return false;
   }
   return isQwenMlxRuntimeReady(auraRoot);
 }
@@ -228,7 +228,7 @@ async function ensureMlxRuntime(options: {
   }
   await runSetupScript({
     scriptPath: script,
-    label: "Qwen3 (MLX)",
+    label: "Breeze TTS 2 (MLX)",
     onEvent,
     signal,
   });
@@ -269,7 +269,7 @@ export async function ensureEngineRuntime(options: {
       if (!isKokoroRuntimeReady(auraRoot, process.platform, kokoroBackend)) {
         throw new Error(
           "Runtime Kokoro (MLX) ainda incompleto após a preparação. " +
-            "Confirme misaki[en] em qwen3-tts-apple-silicon/requirements.txt."
+            "Confirme misaki[en] em mlx/requirements.txt."
         );
       }
       return;
@@ -295,25 +295,8 @@ export async function ensureEngineRuntime(options: {
     return;
   }
 
-  if (process.platform === "win32" || process.platform === "linux") {
-    const script = setupScriptPath(auraRoot, "setup-torch-tts.cjs");
-    if (!script) {
-      throw new Error(
-        "Runtime Qwen (Torch) ausente e scripts/setup-torch-tts.cjs não encontrado. " +
-          "Em desenvolvimento: bun run setup:tts"
-      );
-    }
-    await runSetupScript({
-      scriptPath: script,
-      label: "Qwen3 (Torch)",
-      args: ["--accel=auto"],
-      onEvent,
-      signal,
-    });
-    if (!isQwenTorchRuntimeReady(auraRoot)) {
-      throw new Error("Runtime Qwen (Torch) ainda incompleto após a preparação.");
-    }
-    return;
+  if (process.platform !== "darwin") {
+    throw new Error("O Breeze TTS 2 requer macOS Apple Silicon com MLX.");
   }
 
   await ensureMlxRuntime({ auraRoot, onEvent, signal });

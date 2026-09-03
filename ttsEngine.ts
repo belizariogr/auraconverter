@@ -1,5 +1,5 @@
 /**
- * Active TTS engine preference (qwen3 | kokoro), persisted under AURA_DATA_DIR.
+ * Active TTS engine preference (Breeze | Kokoro), persisted under AURA_DATA_DIR.
  */
 import fs from "fs";
 import path from "path";
@@ -233,68 +233,68 @@ export const KOKORO_VOICES: VoiceCatalogEntry[] = [
   },
 ];
 
-export const QWEN_VOICES: VoiceCatalogEntry[] = [
+export const BREEZE_VOICES: VoiceCatalogEntry[] = [
   {
     id: "Vivian",
     name: "Vivian",
     gender: "Feminino",
-    description: "Narração clara e calorosa — boa para romances e não-ficção.",
+    description: "Voz criada por prompt: mulher jovem, calorosa e íntima.",
     icon: "👩",
   },
   {
     id: "Serena",
     name: "Serena",
     gender: "Feminino",
-    description: "Timbre suave, adequada para leituras longas.",
+    description: "Voz criada por prompt: mulher suave e tranquilizadora.",
     icon: "👩‍🦰",
   },
   {
     id: "Sohee",
     name: "Sohee",
     gender: "Feminino",
-    description: "Voz expressiva e natural.",
+    description: "Voz criada por prompt: mulher expressiva e luminosa.",
     icon: "🧑",
   },
   {
     id: "Ono_Anna",
     name: "Ono Anna",
     gender: "Feminino",
-    description: "Dicção limpa, boa para diálogos.",
+    description: "Voz criada por prompt: mulher confiante e precisa.",
     icon: "👩‍🎤",
   },
   {
     id: "Ryan",
     name: "Ryan",
     gender: "Masculino",
-    description: "Tom sereno e estável para capítulos longos.",
+    description: "Voz criada por prompt: homem calmo, quente e estável.",
     icon: "👨",
   },
   {
     id: "Aiden",
     name: "Aiden",
     gender: "Masculino",
-    description: "Presença mais animada e envolvente.",
+    description: "Voz criada por prompt: homem amigável e envolvente.",
     icon: "🧑‍💼",
   },
   {
     id: "Eric",
     name: "Eric",
     gender: "Masculino",
-    description: "Dicção formal, boa para textos técnicos.",
+    description: "Voz criada por prompt: homem maduro, formal e autoritativo.",
     icon: "👨‍🏫",
   },
   {
     id: "Dylan",
     name: "Dylan",
     gender: "Masculino",
-    description: "Tom sólido para narrativa geral.",
+    description: "Voz criada por prompt: homem grave e comedido.",
     icon: "🧔",
   },
   {
     id: "Uncle_Fu",
     name: "Uncle Fu",
     gender: "Masculino",
-    description: "Timbre maduro e pausado.",
+    description: "Voz criada por prompt: homem profundo e paternal.",
     icon: "🧓",
   },
 ];
@@ -316,5 +316,5 @@ export function sortVoicesForLanguage(
 }
 
 export function voicesForEngine(engine: TtsEngineId) {
-  return engine === "kokoro" ? KOKORO_VOICES : QWEN_VOICES;
+  return engine === "kokoro" ? KOKORO_VOICES : BREEZE_VOICES;
 }

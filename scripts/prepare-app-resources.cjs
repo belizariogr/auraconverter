@@ -4,7 +4,7 @@
  *     dist/
  *     bin/ffmpeg (+ ffprobe)    (static binaries for M4B / convert)
  *     python/…                  (portable CPython 3.12; all OS, cached in build/cache)
- *     qwen3-tts-apple-silicon/  (darwin only)
+ *     mlx/  (darwin only)
  *     tts/torch/                (win32/linux only)
  *     tts-accel.json
  *
@@ -23,7 +23,7 @@ const { execFileSync, spawnSync } = require("child_process");
 
 const root = path.resolve(__dirname, "..");
 const out = path.join(root, "build", "app-resources");
-const qwenSrc = path.join(root, "qwen3-tts-apple-silicon");
+const qwenSrc = path.join(root, "mlx");
 const torchSrc = path.join(root, "tts", "torch");
 const kokoroSrc = path.join(root, "tts", "kokoro");
 const cacheDir = path.join(root, "build", "cache");
@@ -269,7 +269,7 @@ function mlxSitePackages() {
 }
 
 function ensureMlxVenv() {
-  console.log("[prepare-app-resources] Ensuring qwen3-tts-apple-silicon/.venv via setup-mlx-tts…");
+  console.log("[prepare-app-resources] Ensuring mlx/.venv via setup-mlx-tts…");
   const setup = spawnSync(
     process.execPath,
     [path.join(__dirname, "setup-mlx-tts.cjs")],
@@ -300,12 +300,13 @@ async function prepareDarwin() {
   const pyBin = bundlePortablePython(pythonPrefix);
   console.log("[prepare-app-resources] Bundled python:", pyBin);
 
-  const qwenDst = path.join(out, "qwen3-tts-apple-silicon");
+  const qwenDst = path.join(out, "mlx");
   fs.mkdirSync(qwenDst, { recursive: true });
-  for (const file of ["tts_server.py", "requirements.txt", "main.py", "README.md"]) {
+  for (const file of ["tts_server.py", "requirements.txt", "main.py", "README.md", "BREEZE_RUNTIME_LICENSE", "BREEZE_NOTICE"]) {
     const src = path.join(qwenSrc, file);
     if (fs.existsSync(src)) fs.copyFileSync(src, path.join(qwenDst, file));
   }
+  copyFiltered(path.join(qwenSrc, "breeze_tts_mlx"), path.join(qwenDst, "breeze_tts_mlx"));
   console.log("[prepare-app-resources] Skipping models/ (downloaded on first launch)");
   console.log("[prepare-app-resources] Copying MLX site-packages...");
   copyFiltered(siteSrc, path.join(qwenDst, "site-packages"));

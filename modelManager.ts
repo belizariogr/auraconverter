@@ -1,6 +1,6 @@
 /**
  * Local TTS model install status + downloads (no Python).
- * Supports Qwen3 (HF repos by platform) and Kokoro (MLX on macOS, ONNX elsewhere).
+ * Supports Breeze TTS 2 (MLX on macOS) and Kokoro (MLX on macOS, ONNX elsewhere).
  */
 import fs from "fs";
 import path from "path";
@@ -28,7 +28,7 @@ export type ModelSpec = {
   id: string;
   folder: string;
   label: string;
-  /** Hugging Face repo (Qwen) or empty for direct URL assets (Kokoro). */
+  /** Hugging Face repo (Breeze) or empty for direct URL assets (Kokoro). */
   repo: string;
   approxBytes: number;
   /** Direct file downloads (Kokoro). */
@@ -37,18 +37,11 @@ export type ModelSpec = {
 
 const MLX_MODELS: ModelSpec[] = [
   {
-    id: "base",
-    folder: "Qwen3-TTS-12Hz-1.7B-Base-8bit",
-    label: "Base 1.7B (ICL / clonagem de voz)",
-    repo: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
-    approxBytes: 2_800_000_000,
-  },
-  {
-    id: "custom",
-    folder: "Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
-    label: "CustomVoice 1.7B (prévias e speakers)",
-    repo: "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
-    approxBytes: 2_800_000_000,
+    id: "breeze",
+    folder: "Breeze-TTS-2-mlx",
+    label: "Breeze TTS 2 (bf16, clonagem e direção de voz)",
+    repo: "mlx-community/Breeze-TTS-2-mlx",
+    approxBytes: 7_600_000_000,
   },
 ];
 
@@ -115,7 +108,8 @@ export function isKokoroMlxPlatform(platform = process.platform): boolean {
 }
 
 export function getQwenModels(platform = process.platform): ModelSpec[] {
-  return isTorchTtsPlatform(platform) ? TORCH_MODELS : MLX_MODELS;
+  void platform;
+  return MLX_MODELS;
 }
 
 export function getKokoroModels(
@@ -262,7 +256,7 @@ export function projectModelsDir(
   if (isTorchTtsPlatform(platform)) {
     return path.join(auraRoot, "tts", "torch", "models");
   }
-  return path.join(auraRoot, "qwen3-tts-apple-silicon", "models");
+  return path.join(auraRoot, "mlx", "models");
 }
 
 export function resolveModelsDir(
@@ -381,8 +375,8 @@ export function getModelsStatus(auraRoot: string, auraDataDir: string) {
         modelsDir: qwen3.modelsDir,
         models: qwen3.models,
         voices: qwen3.voices,
-        label: "Qwen3-TTS",
-        description: "Alta qualidade com clonagem de voz (ICL).",
+        label: "Breeze TTS 2",
+        description: "Vozes criadas por prompt, com clonagem da referência gerada.",
       },
       kokoro: {
         ready: kokoro.ready,
